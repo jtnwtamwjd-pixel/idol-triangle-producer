@@ -226,6 +226,38 @@ test('True', () => assert(endState({ fans: E.FANS_TARGET, bond: E.BOND_TRUE, foc
 test('ファン不足 → Normal', () => assert(endState({ fans: E.FANS_TARGET - 1, bond: 100, focus: [10, 10, 10], score: 1e6 }) === 'normal'));
 test('偏りがあってもファン不足ならIndividualにならない', () => assert(endState({ fans: 10, bond: 100, focus: [50, 1, 1], score: E.TRUE_SCORE }) === 'normal'));
 
+console.log('== 素材の割り振り ==');
+test('素材が空ならSVGのまま(charId なし)', () => {
+  const s = G('newGameState')('a0');
+  assert(s.candidates.every((c) => !c.charId));
+  assert(G('avatarSVG')(s.candidates[0], 50).startsWith('<svg'));
+});
+test('素材があれば重複なく割り振り、ユニット外の候補生とも重ならない', () => {
+  G(`globalThis.ASSET_CHARACTERS = Array.from({ length: 12 }, (_, k) => ({ id: 'c' + k, image: 'img' + k + '.jpg', videos: k % 2 ? ['a.mp4', 'b.mp4'] : [] }))`);
+  const s = G('newGameState')('a1');
+  const ids = s.candidates.map((c) => c.charId);
+  assert(ids.every(Boolean) && new Set(ids).size === ids.length, 'dup in candidates');
+  G('formUnit')(s, s.candidates.slice(0, 3).map((c) => c.id), 'U');
+  s.week = C.WEEKS_PER_YEAR; G('advanceWeek')(s);
+  const unitIds = new Set(s.unit.map((i) => i.charId));
+  assert(s.candidates.every((c) => !c.charId || !unitIds.has(c.charId)), 'overlap with unit');
+  assert(G('avatarSVG')(s.unit[0], 50).startsWith('<img'));
+});
+test('性格指定のある素材は、その性格に優先して割り振る', () => {
+  G(`globalThis.ASSET_CHARACTERS = Object.keys(PERSONALITIES).map((p) => ({ id: 'p_' + p, image: p + '.jpg', personality: p }))`);
+  const s = G('newGameState')('a2');
+  const first = {};
+  for (const c of s.candidates) if (!first[c.personality]) first[c.personality] = c;
+  for (const c of Object.values(first)) assert(c.charId === 'p_' + c.personality, c.personality + ' -> ' + c.charId);
+});
+test('エピソード・ギャップには動画マーカーが付く', () => {
+  const s = G('newGameState')('a3');
+  G('formUnit')(s, s.candidates.slice(0, 3).map((c) => c.id), 'U');
+  const sc = G('episodeScene')(s, s.unit[0], 0);
+  assert(sc.video === s.unit[0].id && sc.kind === 'episode');
+  G('globalThis.ASSET_CHARACTERS = []');
+});
+
 console.log('== 通しプレイ ==');
 test('3つの方針で最後まで遊べる', () => {
   for (const p of [balanced, favor, lazy]) { const r = playThrough('full', p); assert(r.s.liveResults.length === 7, 'lives ' + r.s.liveResults.length); }

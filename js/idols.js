@@ -77,9 +77,48 @@ function fillName(text, idol) {
   return text.replace(/\{name\}/g, idol ? idol.name : '');
 }
 
-// ---------- SVGアバター ----------
+// ---------- 素材(assets/manifest.js)のキャラ割り振り ----------
+function assetChars() {
+  return typeof ASSET_CHARACTERS !== 'undefined' && Array.isArray(ASSET_CHARACTERS)
+    ? ASSET_CHARACTERS.filter((c) => c && c.id && c.image) : [];
+}
+function idolCharacter(idol) {
+  if (!idol || !idol.charId) return null;
+  return assetChars().find((c) => c.id === idol.charId) || null;
+}
+function idolVideos(idol) {
+  const ch = idolCharacter(idol);
+  return ch && Array.isArray(ch.videos) ? ch.videos.filter(Boolean) : [];
+}
+// list の各アイドルに、未使用のキャラを割り振る(taken は使用済みとみなすキャラID)
+// 素材が足りなければ割り振らない(SVGで表示される)
+function assignCharacters(list, taken, seed) {
+  const chars = assetChars();
+  if (!chars.length) return;
+  const used = new Set(taken || []);
+  for (const i of list) if (idolCharacter(i)) used.add(i.charId);
+  for (const idol of list) {
+    if (idolCharacter(idol)) continue;
+    idol.charId = null;
+    let pool = chars.filter((c) => !used.has(c.id));
+    if (!pool.length) continue;
+    const match = pool.filter((c) => c.personality === idol.personality);
+    if (match.length) pool = match;
+    const ch = pool[hashSeed(seed + ':char:' + idol.id) % pool.length];
+    idol.charId = ch.id;
+    used.add(ch.id);
+  }
+}
+function ensureCharacters(state) {
+  assignCharacters(state.unit, [], state.seed);
+  assignCharacters(state.candidates, state.unit.map((i) => i.charId).filter(Boolean), state.seed);
+}
+
+// ---------- アバター(素材があれば画像、なければSVG) ----------
 function avatarSVG(idol, size) {
   size = size || 96;
+  const ch = idolCharacter(idol);
+  if (ch) return `<img class="avatar photo" src="${ch.image}" width="${size}" height="${size}" alt="${idol.name}" draggable="false">`;
   const P = PERSONALITIES[idol.personality];
   const L = idol.look;
   const cos = COSTUMES[idol.costume] || COSTUMES.school;

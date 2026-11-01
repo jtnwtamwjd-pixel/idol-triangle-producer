@@ -23,7 +23,7 @@ function loadMeta() {
 }
 function saveSettings() { try { localStorage.setItem(C.SETTINGS_KEY, JSON.stringify(App.settings)); } catch (e) { /* noop */ } }
 function loadSettings() {
-  const d = { bgm: true, musicVol: 0.7, seVol: 0.6, offsetMs: 0, noteSpeed: 1 };
+  const d = { bgm: true, videos: true, musicVol: 0.7, seVol: 0.6, offsetMs: 0, noteSpeed: 1 };
   try { return Object.assign(d, JSON.parse(localStorage.getItem(C.SETTINGS_KEY) || '{}')); } catch (e) { return d; }
 }
 function applyVolumes() {
@@ -69,7 +69,17 @@ function playScenes(scenes, done) {
   const [sc, ...rest] = scenes;
   let i = 0;
   const box = openModal('<div class="scene"></div>', 'scene-modal');
+  // イベント動画:台詞の途中(VIDEO_CUT_AT の位置)で一度だけ挟む
+  const vIdol = sc.video && App.settings.videos ? findIdol(App.state, sc.video) : null;
+  const videos = vIdol ? idolVideos(vIdol) : [];
+  const cutAt = videos.length ? Math.min(sc.lines.length - 1, Math.max(1, Math.round(sc.lines.length * C.VIDEO_CUT_AT))) : -1;
   const next = () => {
+    if ($('.video-cut')) return;
+    if (i === cutAt && !sc._videoShown) {
+      sc._videoShown = true;
+      playVideoCut(videos, `${vIdol.name}|${sc.title}`, next);
+      return;
+    }
     if (i < sc.lines.length) {
       const ln = sc.lines[i++];
       const sp = speakerInfo(ln.speaker);
@@ -107,10 +117,50 @@ function playScenes(scenes, done) {
     closeModal();
     playScenes(rest, done);
   };
-  const onKey = (e) => { if ((e.key === 'Enter' || e.key === ' ') && !$('.choices', box)) { e.preventDefault(); next(); } };
+  const onKey = (e) => { if ($('.video-cut')) return; if ((e.key === 'Enter' || e.key === ' ') && !$('.choices', box)) { e.preventDefault(); next(); } };
   box.parentElement.addEventListener('click', () => { if (!$('.choices', box)) next(); });
   document.addEventListener('keydown', onKey);
   next();
+}
+
+// 動画を画面いっぱいに再生。複数あれば順につなげてループし、「次へ」を押すまで流し続ける
+function playVideoCut(urls, title, done) {
+  const ov = document.createElement('div');
+  ov.className = 'video-cut';
+  ov.innerHTML = `<video playsinline preload="auto"></video>
+    <div class="vc-bar"><span class="vc-title">${esc(title)}</span><span class="vc-count"></span><button class="btn big vc-next">次へ</button></div>
+    <div class="vc-error hidden">動画を読み込めませんでした</div>`;
+  document.body.appendChild(ov);
+  const v = $('video', ov);
+  // BGMを止める(終了時に元に戻す)
+  const prevVol = AudioSys.music ? AudioSys.music.gain.value : null;
+  if (AudioSys.music) AudioSys.music.gain.value = 0;
+  let k = 0, fails = 0;
+  const playAt = (n) => {
+    k = n % urls.length;
+    $('.vc-count', ov).textContent = urls.length > 1 ? `${k + 1}/${urls.length}` : '';
+    v.src = urls[k];
+    v.loop = urls.length === 1;
+    const p = v.play();
+    if (p) p.catch(() => { v.muted = true; v.play().catch(() => {}); }); // 自動再生が拒否されたら消音で再生
+  };
+  v.onplaying = () => { fails = 0; };
+  v.onended = () => playAt(k + 1);
+  v.onerror = () => {
+    fails++;
+    if (fails >= urls.length) { $('.vc-error', ov).classList.remove('hidden'); return; }
+    playAt(k + 1);
+  };
+  const close = (e) => {
+    if (e) e.stopPropagation();
+    v.pause(); v.removeAttribute('src'); v.load();
+    ov.remove();
+    if (AudioSys.music && prevVol != null) AudioSys.music.gain.value = prevVol;
+    done();
+  };
+  $('.vc-next', ov).onclick = close;
+  $('.vc-next', ov).focus();
+  playAt(0);
 }
 
 function toast(msg) {
@@ -178,6 +228,7 @@ function showSettings() {
   const s = App.settings;
   const box = openModal(`<h2>設定</h2>
     <label class="set"><input type="checkbox" id="s-bgm" ${s.bgm ? 'checked' : ''}> BGMを流す</label>
+    <label class="set"><input type="checkbox" id="s-vid" ${s.videos ? 'checked' : ''}> イベント中に動画を流す(素材がある場合)</label>
     <label class="set">音楽の音量 <input type="range" id="s-mv" min="0" max="1" step="0.05" value="${s.musicVol}"></label>
     <label class="set">効果音の音量 <input type="range" id="s-sv" min="0" max="1" step="0.05" value="${s.seVol}"></label>
     <label class="set">判定オフセット <input type="range" id="s-off" min="-150" max="150" step="5" value="${s.offsetMs}"> <span id="s-offv">${s.offsetMs}ms</span></label>
@@ -188,6 +239,7 @@ function showSettings() {
   $('#s-ns', box).oninput = (e) => ($('#s-nsv', box).textContent = '×' + e.target.value);
   $('#s-close', box).onclick = () => {
     s.bgm = $('#s-bgm', box).checked;
+    s.videos = $('#s-vid', box).checked;
     s.musicVol = +$('#s-mv', box).value; s.seVol = +$('#s-sv', box).value;
     s.offsetMs = +$('#s-off', box).value; s.noteSpeed = +$('#s-ns', box).value;
     saveSettings(); ensureAudio(); applyVolumes();
@@ -200,6 +252,7 @@ function showSettings() {
 function renderPhase() {
   const s = App.state;
   if (!s) return renderTitle();
+  ensureCharacters(s); // 素材が増えた・減った場合に割り振り直す
   if (s.phase === 'scout') return renderScout();
   if (s.phase === 'ending') return renderTitle();
   if (s.phase === 'finale') return renderEnding(s.finalScore);

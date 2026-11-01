@@ -157,6 +157,10 @@ const C = {
     SECRET_BEFORE_TRUE: true,
   },
 
+  // ---- 素材(assets/manifest.js) ----
+  VIDEO_EVENT_KINDS: ['episode', 'honne', 'gap', 'accept'], // 動画を流すイベントの種類
+  VIDEO_CUT_AT: 0.5, // イベントの台詞のどの位置で動画を挟むか(0=最初、1=最後)
+
   // ---- 周回 ----
   LOOP: { MONEY_BONUS: 50000, STAT_BONUS: 4, MAX_STACK: 3 },
 };

@@ -30,6 +30,7 @@ function newGameState(seed, meta) {
     _metaLoopBonus: loopStack * C.LOOP.STAT_BONUS,
   };
   s.candidates = generateCandidates(s.seed, 1, s._metaLoopBonus, s.usedNames);
+  ensureCharacters(s);
   return s;
 }
 
@@ -103,6 +104,12 @@ function makeScene(title, idol, raw, choices) {
     })),
     choices: choices || null,
   };
+}
+
+// イベント動画の対象にする(実際に流すかは UI 側で素材と設定を見て決める)
+function withVideo(scene, idol, kind) {
+  if (C.VIDEO_EVENT_KINDS.includes(kind)) { scene.video = idol.id; scene.kind = kind; }
+  return scene;
 }
 
 // ---------- 候補生の選択 ----------
@@ -342,7 +349,7 @@ function acceptScene(state, idol) {
   idol.accepted = true;
   addAffection(idol, 5);
   pushLog(state, `${idol.name}が社長を認めた!(親愛度が上がりやすくなった)`);
-  return makeScene(`${idol.name}:才能を認めた日`, idol, RELATIONS.tsundere.acceptScene);
+  return withVideo(makeScene(`${idol.name}:才能を認めた日`, idol, RELATIONS.tsundere.acceptScene), idol, 'accept');
 }
 
 function checkEpisodes(state, idol) {
@@ -359,9 +366,9 @@ function checkEpisodes(state, idol) {
 
 function episodeScene(state, idol, n) {
   const P = PERSONALITIES[idol.personality];
-  if (n < 2) return makeScene(`${idol.name} エピソード${n + 1}`, idol, P.episodes[n]);
+  if (n < 2) return withVideo(makeScene(`${idol.name} エピソード${n + 1}`, idol, P.episodes[n]), idol, 'episode');
   const raw = HONNE_TEMPLATES[idol.relation](P.honneCore);
-  return makeScene(`${idol.name} エピソード3「本音」`, idol, raw, [
+  return withVideo(makeScene(`${idol.name} エピソード3「本音」`, idol, raw, [
     {
       label: '黙って、最後まで受け止める',
       apply: (st) => {
@@ -374,7 +381,7 @@ function episodeScene(state, idol, n) {
       label: '「らしくないな」と冗談で返す',
       apply: (st) => `${idol.name}は少し笑って、いつもの顔に戻った。(あとでアイドルの詳細から見直せる)`,
     },
-  ]);
+  ]), idol, 'honne');
 }
 
 // ---------- ランダムイベント ----------
@@ -480,7 +487,7 @@ function gapEventFor(state, rng) {
   i.focus += 1;
   pushLog(state, `${i.name}の意外な一面を知った`);
   const raw = PERSONALITIES[i.personality].gapScene.concat([['n', `【ギャップ】${PERSONALITIES[i.personality].gap}(親愛度 +5)`]]);
-  return makeScene(`${i.name}の意外な一面`, i, raw);
+  return withVideo(makeScene(`${i.name}の意外な一面`, i, raw), i, 'gap');
 }
 
 function pickRandomEvent(state, rng) {
@@ -501,6 +508,7 @@ function advanceWeek(state) {
   if (weekInYear(state.week) === 1) {
     const meta = state._metaLoopBonus || 0;
     state.candidates = generateCandidates(state.seed, yearOf(state.week), meta, state.usedNames);
+    ensureCharacters(state);
     state.phase = 'scout';
   } else {
     state.phase = 'home';

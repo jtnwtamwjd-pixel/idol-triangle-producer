@@ -209,3 +209,14 @@ code { background: #f3ecfa; padding: 0 4px; border-radius: 4px; }
   .scene-modal { margin-bottom: 0; }
   .scene-body .avatar { width: 64px; height: 64px; }
 }
+
+/* ---- 素材(画像・イベント動画) ---- */
+.avatar.photo { object-fit: cover; object-position: center 15%; border-radius: 50%; background: #f3ecfa; display: block; }
+.d-left .avatar.photo { border-radius: 16px; width: 180px; height: 240px; }
+.video-cut { position: fixed; inset: 0; z-index: 80; background: #000; display: flex; flex-direction: column; animation: fade .2s; }
+.video-cut video { flex: 1; min-height: 0; width: 100%; object-fit: contain; background: #000; }
+.vc-bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: rgba(20, 10, 40, .9); color: #fff; }
+.vc-title { flex: 1; font-weight: bold; }
+.vc-count { color: #d8c8ff; font-size: .85em; }
+.vc-error { position: absolute; top: 40%; width: 100%; text-align: center; color: #fff; }
+.hidden { display: none !important; }

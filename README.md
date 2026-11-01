@@ -29,6 +29,22 @@ tools/serve.js      依存なしの簡易サーバー
 ```
 ロジック(`game.js`、`score.js`、`music.js`、`ending.js` など)は DOM に依存しないので、Node からそのまま読み込んでテストできます。
 
+## 画像・動画の素材を追加する
+1. 画像を `assets/img/` に、動画を `assets/video/` に置く(動画は mp4(H.264)推奨)
+2. [assets/manifest.js](assets/manifest.js) にキャラクターを1行ずつ追加する
+   ```js
+   { id: 'char01', image: 'assets/img/char01.jpg', videos: ['assets/video/char01_a.mp4', 'assets/video/char01_b.mp4'] },
+   ```
+   - `personality`(nekketsu / pure / cool / mypace / azatoi / pro / kurou)を書くと、その性格の候補生に優先して割り振られます
+3. 候補生には自動で割り振られます。同じ年の候補生どうしとユニット内では重なりません。素材が足りない子はSVGのアバターのままです
+4. エピソード・本音イベント・ギャップ・「才能を認めた日」の途中で、そのキャラの動画が流れます
+   - 複数ある場合はつなげてループし、「次へ」を押すまで再生を続けます
+   - 動画を挟む位置と、動画を流すイベントの種類は `constants.js` の `VIDEO_CUT_AT` と `VIDEO_EVENT_KINDS` で変えられます
+   - 設定画面でオフにもできます
+5. 既存のセーブデータにも、次に読み込んだときに自動で割り振られます
+
+※ GitHub Pages は公開サイトです。1ファイル100MBまでで、サイト全体は1GBまでにしてください。
+
 ## 操作
 - リズムゲーム:D / F / J / K キー、またはレーンをタップ。Esc か「中断」で中断し、おまかせに切り替えられる
 - 会話:クリックか Enter で進む
