@@ -1,23 +1,30 @@
 // ============================================================
 // ライブのスコア計算(リズムゲームとおまかせで共通)
-// ライブスコア = (Σ(基礎ステータス × ポジション係数)) × コンボ補正 + 判定ボーナス
+// 1曲のスコア = (Σ(基礎ステータス × ポジション係数)) × コンボ補正 + 判定ボーナス
+//   ※Σ には人数補正・曲レベル補正・サイドのバフ・スタジオ補正がかかる
 //   ※フィーバー中に処理したノーツの分は、基礎点・判定ボーナスに倍率がかかる
+// ライブのスコア = セットリストの各曲のスコアの合計
 // ============================================================
 
 // キャラの基礎ステータス(衣装・調子・体力の補正込み)
-function idolLivePower(idol) {
+// staminaOverride:ライブ中に曲ごとに減った体力を反映するときに使う
+function idolLivePower(idol, staminaOverride) {
   const cos = COSTUMES[idol.costume] || COSTUMES.school;
   const fav = PERSONALITIES[idol.personality].favCostume === idol.costume ? FAV_COSTUME_BONUS : 0;
   const s = idol.stats;
   let p = s.tech * (1 + cos.bonus.tech + fav) + s.sense * (1 + cos.bonus.sense + fav) + s.visual * (1 + cos.bonus.visual + fav);
   p *= C.CONDITION_LIVE_MOD[idol.condition + 2];
-  if (idol.stamina < C.LOW_STAMINA) p *= C.LOW_STAMINA_LIVE_MOD;
+  const st = staminaOverride != null ? staminaOverride : idol.stamina;
+  if (st < C.LOW_STAMINA) p *= C.LOW_STAMINA_LIVE_MOD;
   return p;
 }
 
-// ライブ開始時のコンテキスト:ポジション係数、サイドのバフ、フィーバー倍率
-function buildLiveContext(state, unit, centerId, setup) {
-  const rng = makeRng(setup.songSeed + ':buff:' + centerId);
+// 1曲ぶんのコンテキスト:ポジション係数、サイドのバフ、フィーバー倍率、曲レベル
+// song: 持ち歌(level を使う)、songIndex: セットリストの何曲目か(0始まり。体力の減少に使う)
+function buildLiveContext(state, unit, centerId, setup, song, songIndex) {
+  songIndex = songIndex || 0;
+  const rng = makeRng(setup.songSeed + ':buff:' + centerId + ':' + songIndex + ':' + (song ? song.id : ''));
+  const drain = songIndex * C.LIVE_STAMINA_PER_SONG;
   const SB = C.SIDE_BUFF;
   const members = unit.members.map((idol) => {
     const isCenter = idol.id === centerId;
@@ -26,7 +33,7 @@ function buildLiveContext(state, unit, centerId, setup) {
       const chance = SB.BASE_CHANCE + unit.bond * SB.BOND_CHANCE + idol.affection * SB.AFFECTION_CHANCE;
       if (rng() < chance) buff = idol.stats.tech >= idol.stats.visual ? 'judge' : 'score';
     }
-    return { id: idol.id, name: idol.name, power: idolLivePower(idol), coef: isCenter ? C.POSITION_COEF.center : C.POSITION_COEF.side, isCenter, buff };
+    return { id: idol.id, name: idol.name, stamina: Math.max(0, idol.stamina - drain), power: idolLivePower(idol, Math.max(0, idol.stamina - drain)), coef: isCenter ? C.POSITION_COEF.center : C.POSITION_COEF.side, isCenter, buff };
   });
   const sides = Math.max(1, members.length - 1);
   const perSide = SB.SCORE_UP * Math.min(1, 2 / sides); // サイドが多いほど1人あたりは小さく
@@ -36,6 +43,7 @@ function buildLiveContext(state, unit, centerId, setup) {
     scoreUp: members.filter((m) => m.buff === 'score').length * perSide,
     judgeBuffs: Math.min(2, members.filter((m) => m.buff === 'judge').length),
     sizeMul: C.SIZE_SCORE_MUL[members.length] || 1,
+    songMul: 1 + ((song ? song.level : 1) - 1) * C.SONG_LV_SCORE,
     feverMult: C.FEVER_MULT_MIN + (C.FEVER_MULT_MAX - C.FEVER_MULT_MIN) * (unit.bond / C.BOND_MAX),
     voltageMul,
     studio: state.invest.studio * C.STUDIO_LIVE_BONUS,
@@ -90,7 +98,7 @@ function countJudge(jc, judge, inFever) {
 
 // ★スコア計算式(唯一の実装)
 function computeLiveScore(ctx, jc) {
-  const sigma = ctx.members.reduce((a, m) => a + m.power * m.coef, 0) * (ctx.sizeMul || 1) * (1 + ctx.scoreUp) * (1 + ctx.studio);
+  const sigma = ctx.members.reduce((a, m) => a + m.power * m.coef, 0) * (ctx.sizeMul || 1) * (ctx.songMul || 1) * (1 + ctx.scoreUp) * (1 + ctx.studio);
   const comboMult = 1 + C.COMBO_BONUS_MAX * Math.min(1, jc.maxCombo / C.COMBO_CAP);
   const base = sigma * C.STAT_SCORE_SCALE * comboMult;
   const feverRatio = jc.total ? (jc.feverPerfect + jc.feverGood) / jc.total : 0;

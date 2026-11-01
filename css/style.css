@@ -266,3 +266,31 @@ code { background: #f3ecfa; padding: 0 4px; border-radius: 4px; }
   .idol-card .stats { grid-template-columns: repeat(2, 1fr); }
   .idol-card .ep { font-size: .85em; }
 }
+
+/* ---- 箱・持ち歌・セットリスト ---- */
+.venue-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin: 4px 0 8px; }
+.venue { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.v-name { font-weight: bold; color: #6a3a00; }
+.v-steps { display: inline-flex; gap: 3px; }
+.v-steps i { width: 14px; height: 8px; border-radius: 3px; background: #eadff2; display: inline-block; }
+.v-steps i.on { background: linear-gradient(90deg, #ffb347, #ff5fa2); }
+.v-next { width: 100%; color: var(--sub); }
+.song-list { max-height: 55vh; overflow: auto; }
+.song-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); padding: 6px 0; }
+.song-row small { display: block; }
+.song-lv { font-weight: bold; color: var(--pink); text-align: right; }
+.setlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.song-pick { display: flex; align-items: center; gap: 8px; border: 2px solid var(--line); background: #fff; border-radius: 12px; padding: 8px 10px; cursor: pointer; font: inherit; text-align: left; color: var(--ink); }
+.song-pick.on { border-color: var(--pink); background: #fff0f7; }
+.song-pick .no { width: 26px; height: 26px; border-radius: 50%; background: #f2ebfa; display: flex; align-items: center; justify-content: center; font-weight: bold; flex: 0 0 26px; }
+.song-pick.on .no { background: var(--pink); color: #fff; }
+.song-pick .t { flex: 1; display: flex; flex-direction: column; }
+.song-pick .lv { font-weight: bold; color: var(--purple); }
+.interlude { text-align: center; padding-top: 12vh; }
+.venue-up { margin: 10px auto; max-width: 520px; padding: 10px; border-radius: 14px; background: linear-gradient(135deg, #ffb347, #ff5fa2); color: #fff; font-weight: bold; font-size: 1.1em; }
+.final-avg { font-size: 1.1em; }
+.breakdown td small { display: block; color: var(--sub); }
+.breakdown td.up { color: #2a9a6a; }
+.breakdown td.down { color: #b0124a; }
+.breakdown details { margin-top: 6px; font-size: .85em; }
+.breakdown summary { cursor: pointer; color: var(--purple); }

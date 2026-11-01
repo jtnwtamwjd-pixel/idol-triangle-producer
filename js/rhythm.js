@@ -27,7 +27,7 @@ class RhythmGame {
       <div class="rg-wrap">
         <canvas class="rg-canvas"></canvas>
         <div class="rg-hud">
-          <div class="rg-title">♪ ${this.song.title} <small>BPM ${this.song.bpm}</small></div>
+          <div class="rg-title">${this.title ? `<b>${this.title}</b> ` : ""}♪ ${this.song.title} <small>BPM ${this.song.bpm}</small></div>
           <button class="btn small ghost rg-quit">中断</button>
         </div>
         <div class="rg-cutin hidden"><div class="rg-cutin-inner">${avatarSVG(this.center, 160)}<div class="rg-cutin-text">FEVER TIME!<small>${this.center.name}</small></div></div></div>

@@ -42,28 +42,39 @@ function playThrough(seed, policy, years) {
     if (lu) {
       const setup = call('liveSetup', s, lu);
       const center = policy.center(s, lu);
-      const lctx = call('buildLiveContext', s, lu, center, setup);
-      const song = call('generateSong', setup.songSeed, { liveIndex: setup.tier });
-      const chart = call('generateChart', song, C.CHART_DENSITY[setup.tier]);
-      const r = call('simulateAuto', lctx, chart, setup.songSeed);
-      resolve(call('applyLiveResult', s, lu, setup, center, r).scenes);
-      if (setup.isFinal) graduated.push(call('graduateUnit', s, lu, r.total).record);
+      const setlist = (policy.setlist || defaultSetlist)(s, lu, setup);
+      const results = setlist.map((id, k) => {
+        const song = call('findSong', lu, id);
+        const { chart } = call('songChart', song, setup);
+        const lctx = call('buildLiveContext', s, lu, center, setup, song, k);
+        return call('simulateAuto', lctx, chart, setup.songSeed + ':' + k);
+      });
+      const out = call('applyLiveResult', s, lu, setup, center, results, setlist);
+      resolve(out.scenes);
+      if (setup.isFinal) graduated.push(call('graduateUnit', s, lu, Math.round(out.total / results.length)).record);
     }
     resolve(call('finishWeek', s));
   }
   return { s, graduated };
 }
 
+// 既定のセットリスト:レベルの高い曲から、体力に余裕があれば上限まで
+function defaultSetlist(s, u, setup) {
+  const minSt = Math.min(...u.members.map((i) => i.stamina));
+  const n = setup.isFinal ? setup.maxSongs : Math.max(setup.minSongs, Math.min(setup.maxSongs, Math.floor((minSt - 20) / C.LIVE_STAMINA_PER_SONG)));
+  return u.songs.slice().sort((a, b) => b.level - a.level).slice(0, n).map((x) => x.id);
+}
 const pickTired = (u) => u.members.some((i) => i.stamina < 35);
 const balanced = {
-  liveUnit: (s) => s.units.reduce((m, u) => (u.livesDone < m.livesDone ? u : m)),
-  center: (s, u) => u.members[u.livesDone % u.members.length].id,
+  liveUnit: (s) => s.units.reduce((m, u) => (u.liveResults.length < m.liveResults.length ? u : m)),
+  center: (s, u) => u.members[u.liveResults.length % u.members.length].id,
   action: (s, u) => {
     if (pickTired(u)) return ['rest', {}];
     if (s.money < 30000) return ['work', { target: 'president' }];
     const w = s.week % 8;
     if (w === 1 || w === 5) return ['sns', { target: 'unit' }];
     if (w === 3) return ['work', { target: 'unit' }];
+    if (w === 7) return ['lesson', { target: 'unit', stat: 'song', songId: u.songs.slice().sort((a, b) => a.level - b.level)[0].id }];
     if (w === 6) { const low = u.members.reduce((m, i) => (i.affection < m.affection ? i : m)); return ['outing', { target: low.id }]; }
     return ['lesson', { target: 'unit', stat: ['tech', 'sense', 'visual'][s.week % 3] }];
   },
@@ -94,13 +105,14 @@ const small = Object.assign({}, balanced, { size: (lim) => lim.min });
 if (process.argv.includes('--sim')) {
   const N = 60, YEARS = 5;
   for (const [name, pol] of Object.entries({ balanced, favor, lazy, big, small })) {
-    const dist = {}; let fans = 0, score = 0, cnt = 0, money = 0;
+    const dist = {}, venues = {}; let fans = 0, score = 0, cnt = 0, money = 0;
     for (let i = 0; i < N; i++) {
       const r = playThrough('sim' + i, pol, YEARS);
-      for (const g of r.graduated) { dist[g.ending] = (dist[g.ending] || 0) + 1; fans += g.fans; score += g.finalScore; cnt++; }
+      for (const g of r.graduated) { venues[g.venueName] = (venues[g.venueName] || 0) + 1; dist[g.ending] = (dist[g.ending] || 0) + 1; fans += g.fans; score += g.finalScore; cnt++; }
       money += r.s.money;
     }
-    console.log(`[${name}] 卒業 ${cnt}組 / 平均ファン ${Math.round(fans / cnt)} / 決勝 ${Math.round(score / cnt)} / ${YEARS}年後の資金 ${Math.round(money / N)}`);
+    console.log(`[${name}] 卒業 ${cnt}組 / 平均ファン ${Math.round(fans / cnt)} / 決勝(1曲平均) ${Math.round(score / cnt)} / ${YEARS}年後の資金 ${Math.round(money / N)}`);
+    console.log('   卒業時の箱', JSON.stringify(venues));
     console.log('   エンディング分布', JSON.stringify(dist));
   }
   const one = playThrough('sim0', balanced, 3);
@@ -183,12 +195,11 @@ test('通常ライブは出場ユニットを選ぶ。選ばれたユニット�
   call('runActions', s);
   assert(s.stage === 'live');
 });
-test('1期生の3年間でライブは全7回、最後(3年目16週)が1期生の決勝', () => {
+test('ライブ枠:1年目4回、2年目以降6回。3年目16週が1期生の決勝', () => {
   const s = newUnitState('p4');
-  let lives = [];
-  for (let w = 1; w <= W * 3; w++) { const l = call('liveOfWeek', s, w); if (l) lives.push([w, l.type]); }
-  assert(lives.length === 7, 'lives ' + lives.length);
-  assert(lives[6][0] === 48 && lives[6][1] === 'final');
+  const count = (y) => { let n = 0; for (let w = (y - 1) * W + 1; w <= y * W; w++) if (call('liveOfWeek', s, w)) n++; return n; };
+  assert(count(1) === 4 && count(2) === 6 && count(3) === 6, [count(1), count(2), count(3)].join(','));
+  assert(call('liveOfWeek', s, 48).type === 'final');
   assert(call('liveOfWeek', s, 48).unitId === s.units[0].id);
 });
 test('親愛度がしきい値を超えるとエピソード解放(最大3つ)', () => {
@@ -203,7 +214,7 @@ test('親愛度がしきい値を超えるとエピソード解放(最大3つ)',
 
 console.log('== スコア計算式 ==');
 function mkCtx(powers, center, size) {
-  return { members: powers.map((p, i) => ({ power: p, coef: i === center ? C.POSITION_COEF.center : 1 })), sizeMul: C.SIZE_SCORE_MUL[size || powers.length], scoreUp: 0, judgeBuffs: 0, feverMult: 1.5, voltageMul: 1, studio: 0, songwriter: 0, bond: 50, avgCondition: 0 };
+  return { songMul: 1, members: powers.map((p, i) => ({ power: p, coef: i === center ? C.POSITION_COEF.center : 1 })), sizeMul: C.SIZE_SCORE_MUL[size || powers.length], scoreUp: 0, judgeBuffs: 0, feverMult: 1.5, voltageMul: 1, studio: 0, songwriter: 0, bond: 50, avgCondition: 0 };
 }
 test('センターに強い子を置くとスコアが上がる', () => {
   const jc = Object.assign(call('newJudgeCounter', 100), { perfect: 100, maxCombo: 100 });
@@ -270,6 +281,72 @@ test('本音全員 + True条件 → Secret', () => assert(endUnit({ fans: E.FANS
 test('True', () => assert(endUnit({ fans: E.FANS_TARGET, bond: E.BOND_TRUE, focus: [10, 10, 10], score: E.TRUE_SCORE }) === 'true'));
 test('ファン不足 → Normal', () => assert(endUnit({ fans: E.FANS_TARGET - 1, bond: 100, focus: [10, 10, 10], score: 1e6 }) === 'normal'));
 test('2人組:均等(50%)は偏りにならない', () => assert(endUnit({ size: 2, fans: E.FANS_TARGET, bond: E.BOND_TRUE, focus: [20, 20], score: E.TRUE_SCORE }) === 'true'));
+
+console.log('== 持ち歌と箱 ==');
+test('結成時に持ち歌2曲、毎年1曲増える', () => {
+  const s = newUnitState('so1');
+  assert(s.units[0].songs.length === C.SONGS_AT_FORMATION);
+  s.week = W; call('advanceWeek', s);
+  assert(s.units[0].songs.length === C.SONGS_AT_FORMATION + C.SONG_EACH_YEAR);
+});
+test('同じ持ち歌はいつも同じ曲・同じ譜面(シード再現)', () => {
+  const s = newUnitState('so2');
+  const u = s.units[0]; s.week = 4;
+  const setup = call('liveSetup', s, u);
+  const a = call('songChart', u.songs[0], setup), b = call('songChart', u.songs[0], setup);
+  assert(JSON.stringify(a.chart) === JSON.stringify(b.chart) && a.song.title === u.songs[0].title);
+});
+test('曲数は箱の上限まで。決勝は規定の3曲', () => {
+  const s = newUnitState('so3');
+  const u = s.units[0]; s.week = 4;
+  assert(call('liveSetup', s, u).maxSongs === Math.min(C.VENUES[0].maxSongs, u.songs.length));
+  u.venue = 6; while (u.songs.length < 6) call('addSong', s, u);
+  assert(call('liveSetup', s, u).maxSongs === 5);
+  s.week = 48;
+  const f = call('liveSetup', s, u);
+  assert(f.isFinal && f.maxSongs === 3 && f.minSongs === 3);
+});
+test('後の曲ほど体力が減って基礎ステータスが下がる', () => {
+  const s = newUnitState('so4');
+  const u = s.units[0]; s.week = 4; u.members.forEach((i) => (i.stamina = 40));
+  const setup = call('liveSetup', s, u);
+  const c0 = call('buildLiveContext', s, u, u.members[0].id, setup, u.songs[0], 0);
+  const c2 = call('buildLiveContext', s, u, u.members[0].id, setup, u.songs[0], 2);
+  assert(c2.members[0].power < c0.members[0].power);
+});
+test('曲レベルが高いほどスコアが上がる', () => {
+  const s = newUnitState('so5');
+  const u = s.units[0]; s.week = 4;
+  const setup = call('liveSetup', s, u);
+  const lo = Object.assign({}, u.songs[0], { level: 1 }), hi = Object.assign({}, u.songs[0], { level: 8 });
+  const jc = Object.assign(call('newJudgeCounter', 100), { perfect: 100, maxCombo: 100 });
+  const sl = call('computeLiveScore', call('buildLiveContext', s, u, u.members[0].id, setup, lo, 0), jc).total;
+  const sh = call('computeLiveScore', call('buildLiveContext', s, u, u.members[0].id, setup, hi, 0), jc).total;
+  assert(sh > sl);
+});
+test('箱はファン数と演奏曲レベル合計の両方を満たすと1段階上がる', () => {
+  const s = newUnitState('so6');
+  const u = s.units[0]; s.week = 4;
+  const nv = C.VENUES[1];
+  // ライブ後の曲レベル(演奏で経験値が入ったあと)の合計で判定される
+  const run = (fans, lv, n) => {
+    u.venue = 0; u.fans = fans; u.songs.forEach((x) => { x.exp = C.SONG_LV_EXP[lv - 1]; x.level = lv; });
+    const setup = call('liveSetup', s, u);
+    const ids = u.songs.slice(0, n || setup.maxSongs).map((x) => x.id);
+    return call('applyLiveResult', s, u, setup, u.members[0].id, ids.map(() => ({ total: 1 })), ids).venueUp;
+  };
+  assert(!run(nv.needFans + 99999, 1, 1), 'song lv too low should not upgrade'); // 1曲 Lv1→2 = 合計2 < 3
+  assert(!run(0, 9), 'fans too low should not upgrade');
+  assert(run(nv.needFans + 99999, 9) === nv.name);
+});
+test('最大の箱は日本武道館', () => assert(C.VENUES[C.VENUES.length - 1].name === '日本武道館'));
+test('持ち歌練習で曲の経験値が上がる', () => {
+  const s = newUnitState('so7');
+  const u = s.units[0], song = u.songs[1];
+  call('setPlan', s, u.id, 'lesson', { target: 'unit', stat: 'song', songId: song.id });
+  call('runActions', s);
+  assert(song.exp === C.SONG_EXP_PRACTICE);
+});
 
 console.log('== 素材の割り振り ==');
 test('素材が空ならSVGのまま', () => {

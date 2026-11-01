@@ -54,7 +54,7 @@ function endingScenes(unit, ev, juniors) {
     case 'bad':
       lines = [
         ['n', `卒業ライブの夜。「${U}」の楽屋は静まり返っていた。`],
-        ['n', unit.bond <= 0 ? '誰も、誰とも目を合わせない。心は、とっくにばらばらだった。' : `スコアは${ev.finalScore.toLocaleString()}点。足切り点の${C.ENDING.CUTOFF_SCORE.toLocaleString()}点に届かなかった。`],
+        ['n', unit.bond <= 0 ? '誰も、誰とも目を合わせない。心は、とっくにばらばらだった。' : `スコアは1曲平均${ev.finalScore.toLocaleString()}点。足切り点の${C.ENDING.CUTOFF_SCORE.toLocaleString()}点に届かなかった。`],
         [m[0].id, '……ごめん。'],
         ['n', '解散の二文字が、事務所に重くのしかかる。'],
       ];
@@ -79,7 +79,7 @@ function endingScenes(unit, ev, juniors) {
         ...m.map((i) => line(i, 'live')),
         ['n', m.map((i) => `${PERSONALITIES[i.personality].name}の${i.name}`).join('、') + '。'],
         ['n', `${n}つの星は、それぞれの色のまま、ひとつの星座になった。`],
-        ['n', `結果は優勝。${ev.finalScore.toLocaleString()}点、完璧なライブだった。`],
+        ['n', `結果は優勝。1曲平均${ev.finalScore.toLocaleString()}点、完璧なライブだった。`],
         [m[0].id, `社長!見てた!?私たち、${n}人そろって、一番明るい星だよ!`],
         ['n', '雑居ビルの一室から始まった物語は、最高の大団円を迎えた。'],
       ];
@@ -95,7 +95,7 @@ function endingScenes(unit, ev, juniors) {
       break;
     default:
       lines = [
-        ['n', `グランプリ決勝は${ev.finalScore.toLocaleString()}点。頂点には、あと一歩届かなかった。`],
+        ['n', `グランプリ決勝は1曲平均${ev.finalScore.toLocaleString()}点。頂点には、あと一歩届かなかった。`],
         ['n', `数週間後。始まりの小さなライブハウスで、「${U}」の卒業ライブが開かれた。`],
         line(m[0], 'live'),
         ['n', '最前列には、デビューの頃から通ってくれているファンの顔があった。'],
@@ -104,6 +104,7 @@ function endingScenes(unit, ev, juniors) {
       lines.push([m[m.length - 1].id, 'うん。いつか、もっと大きなステージに、みんなを連れて行こう。']);
       lines.push(['n', '終わらないアンコールの中、メンバーは未来への約束を交わした。']);
   }
+  if ((unit.venue || 0) === C.VENUES.length - 1) lines.splice(Math.min(2, lines.length), 0, ['n', '思えば、地下ライブハウスから始まった道のりは、日本武道館の満員の客席にまで続いていた。']);
   // 卒業と、後輩たちへのバトン
   if (ev.id !== 'bad') {
     lines.push(['n', `そして「${U}」は、3年間の活動を終えて卒業した。`]);

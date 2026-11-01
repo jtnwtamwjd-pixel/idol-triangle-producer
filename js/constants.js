@@ -10,8 +10,8 @@ const C = {
   WEEKS_PER_YEAR: 16,
   CAREER_YEARS: 3, // ユニットの活動期間。最終年の最終週が卒業ライブ(決勝)
   // 年ごとのライブ週(年内の週)。最終週は、卒業するユニットがいれば決勝になる
-  // 1期生の3年間でちょうど全7回(2 + 2 + 3)
-  LIVE_WEEKS_BY_YEAR: { 1: [8, 16], 2: [8, 16], default: [5, 10, 16] },
+  // 1年目は年4回、2年目以降は年6回(3年目以降の16週は卒業ライブ)
+  LIVE_WEEKS_BY_YEAR: { 1: [4, 8, 12, 16], default: [3, 6, 9, 12, 15, 16] },
   CANDIDATES_MIN: 6,
   CANDIDATES_MAX: 9,
   // ユニットの人数:下限 UNIT_MIN、上限 = min(UNIT_MAX, 候補生の数 − UNIT_SIZE_OFFSET)
@@ -127,37 +127,52 @@ const C = {
     COND_MOD: 0.04, BOND_MOD: 0.0015, PERFECT_MAX: 0.92, PERFECT_MIN: 0.15,
   },
 
-  // ---- ライブ:ライバルと報酬 ----
-  RIVALS: [
-    { name: 'ハニカムドロップ', score: 14000 },
-    { name: 'SPARK☆LINE', score: 21000 },
-    { name: '月下美人', score: 28000 },
-    { name: 'ミルキーウェイ急行', score: 35000 },
-    { name: 'Noir Crown', score: 42000 },
-    { name: 'Re:Vival', score: 48000 },
-    { name: 'GRAND ECLIPSE', score: 75000 },
+  // ---- ライブ:箱(会場)とライバル ----
+  // ユニットごとに箱レベルを持つ。ライブのあと、ファン数と「そのライブの演奏曲レベルの合計」が
+  // 次の箱の条件(needFans / needSongLv)を満たしていれば1段階上がる(1回に1段階、下がらない)
+  // rivalScore はライバルの「1曲あたり」の点数。こちらも1曲ずつ計算して合計で競う
+  VENUES: [
+    { name: '地下ライブハウス', cap: 150, maxSongs: 2, rival: 'ハニカムドロップ', rivalScore: 14000, fanMul: 1.0, money: 80000, density: 0.55 },
+    { name: 'ライブハウス', cap: 400, maxSongs: 2, rival: 'SPARK☆LINE', rivalScore: 21000, fanMul: 1.15, money: 110000, density: 0.6, needFans: 2500, needSongLv: 3 },
+    { name: 'ライブホール', cap: 1000, maxSongs: 3, rival: '月下美人', rivalScore: 28000, fanMul: 1.3, money: 150000, density: 0.65, needFans: 8000, needSongLv: 5 },
+    { name: '市民ホール', cap: 2000, maxSongs: 3, rival: 'ミルキーウェイ急行', rivalScore: 36000, fanMul: 1.45, money: 200000, density: 0.7, needFans: 18000, needSongLv: 7 },
+    { name: '大ホール', cap: 5000, maxSongs: 4, rival: 'Noir Crown', rivalScore: 44000, fanMul: 1.6, money: 260000, density: 0.75, needFans: 35000, needSongLv: 9 },
+    { name: 'アリーナ', cap: 10000, maxSongs: 4, rival: 'Re:Vival', rivalScore: 52000, fanMul: 1.8, money: 330000, density: 0.8, needFans: 60000, needSongLv: 12 },
+    { name: '日本武道館', cap: 14000, maxSongs: 5, rival: 'CROWN JEWEL', rivalScore: 60000, fanMul: 2.0, money: 420000, density: 0.85, needFans: 100000, needSongLv: 16 },
   ],
+  // 卒業ライブ(グランプリ決勝):規定の曲数を演奏し、1曲平均でエンディングを判定する
+  FINAL: { name: 'アイドルグランプリ決勝', rival: 'GRAND ECLIPSE', rivalScore: 75000, songs: 3, density: 0.85, fanMul: 2.0, money: 500000 },
   RIVAL_VARIANCE: 0.06,
-  LIVE_FANS_WIN_RATE: 0.35,  // スコア × 倍率 = ファン増加
-  LIVE_FANS_LOSE_RATE: 0.10,
-  LIVE_MONEY_WIN: 120000,
-  LIVE_MONEY_LOSE: 40000,
+  LIVE_FANS_WIN_RATE: 0.12,  // 合計スコア × 倍率 × 箱の fanMul = ファン増加
+  LIVE_FANS_LOSE_RATE: 0.04,
+  LIVE_MONEY_LOSE_RATE: 0.35, // 負けたときは箱の報酬 × この割合
   LIVE_BOND_WIN: 6,
   LIVE_BOND_LOSE: 2,
-  LIVE_STAMINA: 20,
+  LIVE_STAMINA_PER_SONG: 9,  // 1曲ごとにメンバーの体力が減る(後半の曲ほど不利になる)
   LIVE_FOCUS_CENTER: 4,
-  LIVE_COSTUME_REWARD: { 2: 'wafuu', 4: 'star' }, // ライバルの段階(0始まり)→ 勝利で入手できる衣装
+  LIVE_COSTUME_REWARD: { 2: 'wafuu', 4: 'star' }, // 箱レベル(0始まり)→ その箱で勝つと入手できる衣装
+
+  // ---- 持ち歌 ----
+  SONGS_AT_FORMATION: 2,     // 結成時の持ち歌(デビュー曲とカップリング)
+  SONG_EACH_YEAR: 1,         // 毎年1週目に、活動中のユニットへ新曲を1曲(周年シングル)
+  SONG_MAX: 8,               // 持ち歌の上限
+  NEW_SONG_COST: 150000,     // ショップで新曲を発注する費用(作詞作曲が得意なメンバーがいれば半額)
+  SONG_LV_MAX: 10,
+  SONG_LV_EXP: [0, 2, 4, 7, 10, 14, 18, 23, 28, 34], // レベルnに必要な累計経験値
+  SONG_EXP_PLAY: 2,          // ライブで演奏すると
+  SONG_EXP_WIN: 1,           // その曲でライバルの1曲点を上回ると追加
+  SONG_EXP_PRACTICE: 2,      // レッスン「持ち歌練習」
+  SONG_LV_SCORE: 0.04,       // 曲レベル1につき Σ に +4%
 
   // ---- 楽曲生成 ----
   SONG: { BPM_MIN: 112, BPM_MAX: 150, BPM_LIVE_STEP: 3 },
-  CHART_DENSITY: [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85], // ライバルの段階ごとの譜面密度
 
   // ---- エンディング(仮の値) ----
   ENDING: {
-    FANS_TARGET: 80000,
+    FANS_TARGET: 120000,
     BOND_TRUE: 75,
-    TRUE_SCORE: 80000,
-    CUTOFF_SCORE: 45000,
+    TRUE_SCORE: 80000,      // 決勝の「1曲平均」スコア
+    CUTOFF_SCORE: 45000,    // 決勝の「1曲平均」スコア
     BIAS_SHARE: 0.6,        // 1人の注力ポイントの割合(3人組の場合)
     BIAS_SHARE_BY_SIZE: { 1: 1.01, 2: 0.75, 3: 0.6, 4: 0.5, 5: 0.45 }, // 人数ごとの基準(1人は判定しない)
     BIAS_MIN_TOTAL: 30,     // 偏りの判定に必要な注力ポイントの合計

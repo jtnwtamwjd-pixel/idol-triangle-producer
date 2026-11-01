@@ -319,7 +319,9 @@ function planLabel(s, p) {
   const name = ACTIONS.find((a) => a[0] === p.action)[1];
   const t = p.opts.target;
   const who = !t || t === 'unit' ? '全員' : t === 'president' ? '社長自身' : (findIdol(s, t) || {}).name;
-  return `${name}${p.opts.stat ? `(${STAT_NAMES[p.opts.stat]})` : ''}${p.action === 'rest' ? '' : `/${who}`}`;
+  const u = s.units.find((x) => s.plan[x.id] === p);
+  const what = p.opts.stat === 'song' ? `(持ち歌「${((u && findSong(u, p.opts.songId)) || {}).title || ''}」)` : p.opts.stat ? `(${STAT_NAMES[p.opts.stat]})` : '';
+  return `${name}${what}${p.action === 'rest' ? '' : `/${who}`}`;
 }
 
 function renderHome() {
@@ -342,9 +344,9 @@ function renderHome() {
       </header>
       <div class="office">🏢 事務所:${officeRankName(s)}(規模 ${officeScale(s)})${s.loop ? `|周回 ${s.loop}` : ''}|シード <code>${esc(s.seed)}</code></div>
       ${live ? (live.type === 'final'
-        ? `<div class="live-banner final"><h2>🏆 卒業ライブ — アイドルグランプリ決勝</h2><p>${unitLabel(lu)}の3年間の集大成。ライバル「${C.RIVALS[C.RIVALS.length - 1].name}」に挑みます。結果でエンディングが決まります。</p></div>`
+        ? `<div class="live-banner final"><h2>🏆 卒業ライブ — アイドルグランプリ決勝</h2><p>${unitLabel(lu)}の3年間の集大成。持ち歌から${C.FINAL.songs}曲を選び、ライバル「${C.FINAL.rival}」に挑みます。1曲平均のスコアでエンディングが決まります。</p></div>`
         : `<div class="live-banner"><h2>🎤 今週はライブ!</h2><p>出場するユニットを選んでください(選んだユニットは今週ほかの行動をしません)。</p>
-            <div class="row center">${s.units.map((u) => `<button class="btn ${s.liveUnitId === u.id ? '' : 'ghost'} pick-live" data-u="${u.id}">${u.gen}期生 ${esc(u.name)}<small>ライブ${u.livesDone + 1}回目 vs ${C.RIVALS[Math.min(u.livesDone, C.RIVALS.length - 2)].name}</small></button>`).join('')}</div></div>`)
+            <div class="row center">${s.units.map((u) => `<button class="btn ${s.liveUnitId === u.id ? '' : 'ghost'} pick-live" data-u="${u.id}">${u.gen}期生 ${esc(u.name)}<small>${venueOf(u).name}・最大${Math.min(venueOf(u).maxSongs, u.songs.length)}曲 vs ${venueOf(u).rival}</small></button>`).join('')}</div></div>`)
       : `<div class="next-live">${nl ? `次のライブ:${nl.inWeeks}週後${nl.type === 'final' ? `(${unitLabel(findUnit(s, nl.unitId))}の卒業ライブ)` : '(出場ユニットはその週に選ぶ)'}` : ''}</div>`}
       ${s.units.map((u) => unitSection(s, u, lu)).join('')}
       <div class="run-bar">
@@ -355,6 +357,7 @@ function renderHome() {
     </div>`;
   $$('.idol-card').forEach((el) => el.onclick = () => showIdolDetail(el.dataset.id));
   $$('.action').forEach((el) => el.onclick = () => chooseAction(findUnit(s, el.dataset.u), el.dataset.act));
+  $$('.songs-btn').forEach((el) => el.onclick = () => showSongs(findUnit(s, el.dataset.u)));
   $$('.pick-live').forEach((el) => el.onclick = () => { setLiveUnit(s, el.dataset.u); playSE('select'); saveGame(); renderHome(); });
   $('#b-run').onclick = runWeek;
   $('#b-shop').onclick = () => showShop('invest');
@@ -374,11 +377,36 @@ function unitSection(s, u, liveUnit) {
       <h3>${genBadge(u)} ${esc(u.name)} <small>${u.members.length}人・${cy}年目/${C.CAREER_YEARS}年${cy === C.CAREER_YEARS ? '(今年で卒業)' : ''}</small></h3>
       <div class="unit-stats"><span>💗 ${u.fans.toLocaleString()}<small>/${C.ENDING.FANS_TARGET.toLocaleString()}</small></span><span>🎤 ${u.liveResults.filter((l) => l.win).length}勝${u.liveResults.filter((l) => !l.win).length}敗</span><span class="bond-mini">🤝 絆 ${u.bond} ${bar(u.bond, C.BOND_MAX, 'bond')}</span></div>
     </div>
+    <div class="venue-row">${venueBadge(u)}<button class="btn small ghost songs-btn" data-u="${u.id}">🎵 持ち歌 ${u.songs.length}曲(Lv合計 ${u.songs.reduce((a, x) => a + x.level, 0)})</button></div>
     <div class="grid members m${u.members.length}">${u.members.map(idolCard).join('')}</div>
     ${isLive ? '<div class="plan-live">🎤 今週はライブに出場します</div>' : `
     <div class="actions">${ACTIONS.map(([k, n, d]) => `<button class="action a-${k} ${p && p.action === k ? 'chosen' : ''}" data-u="${u.id}" data-act="${k}"><b>${n}</b><small>${d}</small></button>`).join('')}</div>
     <div class="plan-chip ${p ? 'set' : ''}">${p ? '✔ ' + esc(planLabel(s, p)) : '行動を選んでください'}</div>`}
   </section>`;
+}
+
+// 箱(会場)と次の箱までの条件
+function venueBadge(u) {
+  const v = venueOf(u), nv = nextVenue(u);
+  const steps = C.VENUES.map((x, k) => `<i class="${k <= (u.venue || 0) ? 'on' : ''}" title="${x.name}"></i>`).join('');
+  return `<div class="venue"><span class="v-name">🏟 ${v.name}<small>(${v.cap.toLocaleString()}人・最大${v.maxSongs}曲)</small></span><span class="v-steps">${steps}</span>
+    ${nv ? `<small class="v-next">次:${nv.name} … ファン ${u.fans.toLocaleString()}/${nv.needFans.toLocaleString()}、前回の演奏曲Lv合計 ${u.lastSetLv || 0}/${nv.needSongLv}</small>` : '<small class="v-next">最高の箱に到達!</small>'}</div>`;
+}
+
+function showSongs(u) {
+  const s = App.state;
+  const cost = newSongCost(s, u);
+  const box = openModal(`<h2>🎵 ${esc(u.name)}の持ち歌</h2>
+    <div class="song-list">${u.songs.map((x) => `<div class="song-row"><div><b>${esc(x.title)}</b> <small>${x.label ? esc(x.label) + '・' : ''}BPM ${x.bpm}・${x.mode === 'major' ? 'メジャー' : 'マイナー'}・演奏 ${x.plays}回</small></div>
+      <div class="song-lv">Lv${x.level}${x.level < C.SONG_LV_MAX ? `<small>次まで ${C.SONG_LV_EXP[x.level] - x.exp}</small>` : '<small>MAX</small>'}</div></div>`).join('')}</div>
+    <p class="hint">曲レベルはライブで演奏する(+${C.SONG_EXP_PLAY}、ライバルの1曲点を上回ると+${C.SONG_EXP_WIN})か、レッスンの「持ち歌練習」(+${C.SONG_EXP_PRACTICE})で上がります。レベル1につきスコア+${Math.round(C.SONG_LV_SCORE * 100)}%。毎年1週目に周年シングルが1曲届きます。</p>
+    <div class="row"><button class="btn" id="sg-buy" ${u.songs.length >= C.SONG_MAX || s.money < cost ? 'disabled' : ''}>新曲を発注する(${yen(cost)})${u.members.some((i) => i.off === 'songwriting') ? '<small>作詞作曲が得意なメンバーがいるので半額</small>' : ''}</button><button class="btn ghost" id="sg-close">閉じる</button></div>`, 'wide');
+  $('#sg-buy', box).onclick = () => {
+    const r = buyNewSong(s, u.id);
+    if (!r.ok) return toast(r.why);
+    playSE('select'); saveGame(); renderHome(); showSongs(u); toast(`新曲「${r.song.title}」が完成!`);
+  };
+  $('#sg-close', box).onclick = closeModal;
 }
 
 function idolCard(i) {
@@ -401,8 +429,9 @@ function chooseAction(unit, act) {
   let html = `<p class="hint">${genBadge(unit)} ${esc(unit.name)}</p>`;
   if (act === 'lesson') {
     html += `<h2>レッスン</h2>
-      <h4>内容</h4><div class="opts" id="o-stat">${['tech', 'sense', 'visual'].map((k) => opt(k, STAT_NAMES[k] + 'レッスン')).join('')}</div>
-      <h4>参加メンバー</h4><div class="opts" id="o-target">${opt('unit', 'ユニット全員', '絆が上がる')}${idolOpts((i) => `個人レッスン:効果大・体力 ${i.stamina}`)}</div>`;
+      <h4>内容</h4><div class="opts" id="o-stat">${['tech', 'sense', 'visual'].map((k) => opt(k, STAT_NAMES[k] + 'レッスン')).join('')}${opt('song', '持ち歌練習', '全員で1曲を練習')}</div>
+      <div id="o-song-wrap" class="hidden"><h4>練習する曲</h4><div class="opts" id="o-song">${unit.songs.map((x) => opt(x.id, esc(x.title), `Lv${x.level}`)).join('')}</div></div>
+      <div id="o-target-wrap"><h4>参加メンバー</h4><div class="opts" id="o-target">${opt('unit', 'ユニット全員', '絆が上がる')}${idolOpts((i) => `個人レッスン:効果大・体力 ${i.stamina}`)}</div></div>`;
   } else if (act === 'work') {
     html += `<h2>お仕事</h2><div class="opts" id="o-target">${opt('unit', 'ユニットで出演', '報酬・ファン大')}${idolOpts((i) => `${OFF_SPECIALTIES[i.off].name}・体力 ${i.stamina}`)}${opt('president', '社長自身が働く', 'メンバーは自主練で体力回復')}</div>`;
   } else if (act === 'sns') {
@@ -412,15 +441,22 @@ function chooseAction(unit, act) {
   }
   html += `<div class="row"><button class="btn ghost" id="o-cancel">やめる</button><button class="btn big" id="o-go" disabled>決定</button></div>`;
   const box = openModal(html);
-  const pick = { stat: act === 'lesson' ? null : undefined, target: null };
-  const ready = () => pick.target && (act !== 'lesson' || pick.stat);
+  const pick = { stat: act === 'lesson' ? null : undefined, target: null, songId: null };
+  const ready = () => (pick.stat === 'song' ? !!pick.songId : pick.target && (act !== 'lesson' || pick.stat));
   const mark = (g, b) => { $$(g + ' .opt', box).forEach((x) => x.classList.toggle('sel', x === b)); $('#o-go', box).disabled = !ready(); };
-  $$('#o-stat .opt', box).forEach((b) => b.onclick = () => { pick.stat = b.dataset.v; mark('#o-stat', b); });
+  $$('#o-stat .opt', box).forEach((b) => b.onclick = () => {
+    pick.stat = b.dataset.v;
+    $('#o-song-wrap', box).classList.toggle('hidden', pick.stat !== 'song');
+    $('#o-target-wrap', box).classList.toggle('hidden', pick.stat === 'song');
+    mark('#o-stat', b);
+  });
+  $$('#o-song .opt', box).forEach((b) => b.onclick = () => { pick.songId = b.dataset.v; mark('#o-song', b); });
   $$('#o-target .opt', box).forEach((b) => b.onclick = () => { pick.target = b.dataset.v; mark('#o-target', b); });
   $('#o-cancel', box).onclick = closeModal;
   $('#o-go', box).onclick = () => {
-    const opts = { target: pick.target };
+    const opts = { target: pick.stat === 'song' ? 'unit' : pick.target };
     if (pick.stat) opts.stat = pick.stat;
+    if (pick.stat === 'song') opts.songId = pick.songId;
     setPlan(s, unit.id, act, opts);
     saveGame(); closeModal(); renderHome();
   };
@@ -480,7 +516,7 @@ function showAlumni() {
     <div class="alumni">
       <div><b>${a.gen}期生「${esc(a.name)}」</b> — ${ENDINGS[a.ending].name}</div>
       <div class="au-faces">${a.members.map((i) => avatarSVG(i, 40)).join('')}</div>
-      <small>決勝 ${a.finalScore.toLocaleString()}点/ファン ${a.fans.toLocaleString()}/${a.wins}勝${a.losses}敗</small>
+      <small>${esc(a.venueName || '')}/決勝 1曲平均 ${a.finalScore.toLocaleString()}点/ファン ${a.fans.toLocaleString()}/${a.wins}勝${a.losses}敗</small>
     </div>`).join('') : '<p>まだ卒業したユニットはいません。最初の卒業は3年目の最終週です。</p>'}
     <button class="btn" onclick="closeModal()">閉じる</button>`, 'wide');
 }
@@ -534,79 +570,132 @@ function showItems() {
 }
 
 // ---------- ライブ ----------
+// 準備画面:セットリスト(演奏曲)とセンターを選ぶ
 function renderLivePrep() {
   const s = App.state;
   const unit = liveUnitThisWeek(s);
   const setup = liveSetup(s, unit);
-  const song = generateSong(setup.songSeed, { liveIndex: setup.tier });
-  const chart = generateChart(song, C.CHART_DENSITY[setup.tier]);
-  let center = unit.members.reduce((m, i) => (idolLivePower(i) > idolLivePower(m) ? i : m)).id;
+  // 既定:レベルの高い曲から。通常ライブは、全員の体力に余裕がある曲数まで
+  const minSt = Math.min(...unit.members.map((i) => i.stamina));
+  const safe = Math.max(setup.minSongs, Math.min(setup.maxSongs, Math.floor((minSt - C.LOW_STAMINA) / C.LIVE_STAMINA_PER_SONG) + 1));
+  const prep = {
+    setlist: unit.songs.slice().sort((a, b) => b.level - a.level).slice(0, setup.isFinal ? setup.maxSongs : safe).map((x) => x.id),
+    center: unit.members.reduce((m, i) => (idolLivePower(i) > idolLivePower(m) ? i : m)).id,
+  };
+  let preview = null;
+  const stopPreview = () => { if (preview) { preview.stop(0.3); preview = null; } };
   const draw = () => {
-    const ctx = buildLiveContext(s, unit, center, setup);
+    const n = prep.setlist.length;
+    const firstSong = findSong(unit, prep.setlist[0]) || unit.songs[0];
+    const ctx = buildLiveContext(s, unit, prep.center, setup, firstSong, 0);
+    const lastDrain = Math.max(0, n - 1) * C.LIVE_STAMINA_PER_SONG;
     root().innerHTML = `
       <div class="screen live-prep">
-        <header class="top"><h2>${setup.isFinal ? '🏆 卒業ライブ — アイドルグランプリ決勝' : `LIVE:${unit.name} ${setup.liveNo}回目`}</h2></header>
-        <div class="vs"><div>${genBadge(unit)}<b>${esc(unit.name)}</b><small>${unit.members.length}人(人数補正 ×${ctx.sizeMul})</small></div><span>VS</span><div><b>${esc(setup.rival)}</b><small>予想スコア ${setup.rivalScore.toLocaleString()}</small></div></div>
-        <div class="song-info">♪ 楽曲「${esc(song.title)}」 BPM ${song.bpm} / ${song.mode === 'major' ? 'メジャー' : 'マイナー'} / ノーツ ${chart.notes.length} / ${Math.round(song.duration)}秒 <small>(シード:${esc(setup.songSeed)})</small> <button class="btn small ghost" id="b-preview">試聴</button></div>
+        <header class="top"><h2>${setup.isFinal ? '🏆 卒業ライブ — アイドルグランプリ決勝' : `🏟 ${esc(setup.venueName)}(${setup.cap.toLocaleString()}人)`}</h2></header>
+        <div class="vs"><div>${genBadge(unit)}<b>${esc(unit.name)}</b><small>${unit.members.length}人(人数補正 ×${ctx.sizeMul})</small></div><span>VS</span><div><b>${esc(setup.rival)}</b><small>1曲 ${setup.rivalPerSong.toLocaleString()}点 × ${n}曲 = ${(setup.rivalPerSong * n).toLocaleString()}点</small></div></div>
+        <h3>セットリスト <small>${setup.isFinal ? `決勝は規定の${setup.maxSongs}曲` : `${setup.minSongs}〜${setup.maxSongs}曲(箱「${esc(setup.venueName)}」の上限)`}/選んだ順に演奏</small></h3>
+        <div class="setlist">${unit.songs.map((x) => {
+          const k = prep.setlist.indexOf(x.id);
+          return `<button class="song-pick ${k >= 0 ? 'on' : ''}" data-id="${x.id}"><span class="no">${k >= 0 ? k + 1 : ''}</span><span class="t"><b>${esc(x.title)}</b><small>BPM ${x.bpm}・演奏${x.plays}回</small></span><span class="lv">Lv${x.level}</span></button>`;
+        }).join('')}</div>
+        <p class="hint">1曲ごとにメンバーの体力が${C.LIVE_STAMINA_PER_SONG}ずつ減り、体力${C.LOW_STAMINA}未満の子は基礎ステータスが下がります(${n}曲目の開始時:${unit.members.map((i) => `${esc(firstName(i))} ${Math.max(0, i.stamina - lastDrain)}`).join('、')})。曲数が多いほど、ファン・曲の経験値・箱のレベルアップ判定(演奏曲Lvの合計)が伸びます。</p>
+        <div class="row"><button class="btn small ghost" id="b-preview" ${n ? '' : 'disabled'}>1曲目を試聴</button></div>
         <h3>センターを選ぶ(係数 ×${C.POSITION_COEF.center})</h3>
         <div class="grid members m${unit.members.length}">${unit.members.map((i) => {
           const m = ctx.members.find((x) => x.id === i.id);
-          return `<div class="card pos-card ${i.id === center ? 'center' : ''}" data-id="${i.id}">
-            <div class="pos-label">${i.id === center ? '★ CENTER' : 'SIDE'}</div>
-            ${avatarSVG(i, 80)}<h4>${esc(i.name)}</h4>
+          return `<div class="card pos-card ${i.id === prep.center ? 'center' : ''}" data-id="${i.id}">
+            <div class="pos-label">${i.id === prep.center ? '★ CENTER' : 'SIDE'}</div>
+            ${avatarSVG(i, 72)}<h4>${esc(i.name)}</h4>
             <p>基礎ステータス <b>${Math.round(m.power)}</b> × ${m.coef}</p>
             <p>${condBadge(i.condition)} 体力 ${i.stamina}</p>
             <p class="small">衣装:${COSTUMES[i.costume].name}</p>
-            ${m.buff ? `<p class="buff">サイドのバフ:${m.buff === 'score' ? 'スコアアップ' : '判定緩和'}</p>` : i.id !== center ? '<p class="small">バフ発動なし</p>' : ''}
           </div>`;
         }).join('')}</div>
-        <p class="hint">サイドのバフは、絆と親愛度が高いほど発動しやすくなります。フィーバー倍率:×${ctx.feverMult.toFixed(2)}(絆で決まる)</p>
+        <p class="hint">サイドのバフ(スコアアップ/判定緩和)は曲ごとに抽選され、絆と親愛度が高いほど発動しやすくなります。フィーバー倍率:×${ctx.feverMult.toFixed(2)}(絆で決まる)</p>
         <div class="row center">
-          <button class="btn big" id="b-rhythm">リズムゲームで挑む<small>D F J K / タップ</small></button>
-          <button class="btn big ghost" id="b-auto">おまかせ<small>ステータスから自動判定</small></button>
+          <button class="btn big" id="b-rhythm" ${n >= setup.minSongs ? '' : 'disabled'}>リズムゲームで挑む<small>D F J K / タップ・1曲ずつ</small></button>
+          <button class="btn big ghost" id="b-auto" ${n >= setup.minSongs ? '' : 'disabled'}>全曲おまかせ<small>ステータスから自動判定</small></button>
         </div>
       </div>`;
-    $$('.pos-card').forEach((el) => el.onclick = () => { center = el.dataset.id; playSE('select'); draw(); });
-    let prev = null;
+    $$('.song-pick').forEach((el) => el.onclick = () => {
+      const id = el.dataset.id, k = prep.setlist.indexOf(id);
+      if (k >= 0) prep.setlist.splice(k, 1);
+      else if (prep.setlist.length < setup.maxSongs) prep.setlist.push(id);
+      else return toast(`この箱では最大${setup.maxSongs}曲です`);
+      playSE('select'); draw();
+    });
+    $$('.pos-card').forEach((el) => el.onclick = () => { prep.center = el.dataset.id; playSE('select'); draw(); });
     $('#b-preview').onclick = () => {
-      if (prev) { prev.stop(); prev = null; playBgm(); return; }
-      stopBgm(); ensureAudio(); prev = new SongPlayer(song, { volume: 0.7 }); prev.start();
-      setTimeout(() => { if (prev) { prev.stop(1); prev = null; } }, 15000);
+      if (preview) { stopPreview(); playBgm(); return; }
+      stopBgm(); ensureAudio();
+      preview = new SongPlayer(songChart(firstSong, setup).song, { volume: 0.7 }); preview.start();
+      setTimeout(stopPreview, 15000);
     };
-    $('#b-rhythm').onclick = () => { if (prev) prev.stop(); startRhythm(unit, setup, song, chart, center); };
-    $('#b-auto').onclick = () => {
-      if (prev) prev.stop();
-      const lctx = buildLiveContext(s, unit, center, setup);
-      finishLive(unit, setup, center, simulateAuto(lctx, chart, setup.songSeed), lctx);
-    };
+    $('#b-rhythm').onclick = () => { stopPreview(); playSetlist(unit, setup, prep.setlist.slice(), prep.center, 'rhythm'); };
+    $('#b-auto').onclick = () => { stopPreview(); playSetlist(unit, setup, prep.setlist.slice(), prep.center, 'auto'); };
   };
   draw();
 }
 
-function startRhythm(unit, setup, song, chart, center) {
+// セットリストを1曲ずつ演奏する。mode: 'rhythm' | 'auto'
+function playSetlist(unit, setup, setlist, centerId, mode) {
   const s = App.state;
-  stopBgm();
-  const lctx = buildLiveContext(s, unit, center, setup);
-  root().innerHTML = '<div class="rhythm-screen" id="rg"></div>';
-  const game = new RhythmGame({
-    container: $('#rg'), song, chart, liveCtx: lctx, center: findIdol(s, center), settings: App.settings,
-    onFinish: (r) => finishLive(unit, setup, center, r, lctx),
-    onAbort: () => {
-      if (confirm('リズムゲームを中断して「おまかせ」で判定しますか?\n(キャンセルすると準備画面に戻ります)')) finishLive(unit, setup, center, simulateAuto(lctx, chart, setup.songSeed), lctx);
-      else renderLivePrep();
-    },
-  });
-  window.__rg = game; // デバッグ・テスト用
-  game.start();
+  const results = [], ctxs = [];
+  const runAuto = (k) => {
+    const song = findSong(unit, setlist[k]);
+    const { chart } = songChart(song, setup);
+    const ctx = buildLiveContext(s, unit, centerId, setup, song, k);
+    ctxs[k] = ctx;
+    results[k] = simulateAuto(ctx, chart, setup.songSeed + ':' + k);
+  };
+  const next = (k) => {
+    if (k >= setlist.length) return finishLive(unit, setup, centerId, results, ctxs, setlist);
+    if (mode === 'auto') { runAuto(k); return next(k + 1); }
+    const song = findSong(unit, setlist[k]);
+    const sc = songChart(song, setup);
+    const ctx = buildLiveContext(s, unit, centerId, setup, song, k);
+    ctxs[k] = ctx;
+    stopBgm();
+    root().innerHTML = '<div class="rhythm-screen" id="rg"></div>';
+    const game = new RhythmGame({
+      container: $('#rg'), song: sc.song, chart: sc.chart, liveCtx: ctx, center: findIdol(s, centerId), settings: App.settings,
+      title: `${k + 1}/${setlist.length}曲目`,
+      onFinish: (r) => { results[k] = r; interlude(k); },
+      onAbort: () => {
+        if (confirm('リズムゲームを中断して、この曲から最後まで「おまかせ」で判定しますか?\n(キャンセルすると準備画面に戻り、このライブをやり直します)')) { mode = 'auto'; next(k); }
+        else renderLivePrep();
+      },
+    });
+    window.__rg = game; // デバッグ・テスト用
+    game.start();
+  };
+  // 曲間:その曲の結果と、次の曲へ進むか残りをおまかせにするか
+  const interlude = (k) => {
+    if (k + 1 >= setlist.length) return next(k + 1);
+    const r = results[k], song = findSong(unit, setlist[k]), nextSong = findSong(unit, setlist[k + 1]);
+    root().innerHTML = `
+      <div class="screen interlude">
+        <p class="end-tag">${k + 1} / ${setlist.length}</p>
+        <h2>「${esc(song.title)}」 ${r.total.toLocaleString()}点 <small>(ライバル 1曲 ${setup.rivalPerSong.toLocaleString()}点)</small></h2>
+        <p>Perfect ${r.judge.perfect} / Good ${r.judge.good} / Miss ${r.judge.miss}・最大 ${r.judge.maxCombo} コンボ・フィーバー ${r.judge.feverCount}回</p>
+        <p>次の曲:「${esc(nextSong.title)}」 Lv${nextSong.level}</p>
+        <div class="row center"><button class="btn big" id="b-nextsong">次の曲へ</button><button class="btn big ghost" id="b-restauto">残りをおまかせ</button></div>
+      </div>`;
+    $('#b-nextsong').onclick = () => next(k + 1);
+    $('#b-restauto').onclick = () => { mode = 'auto'; next(k + 1); };
+  };
+  next(0);
 }
 
-function finishLive(unit, setup, centerId, r, lctx) {
+function finishLive(unit, setup, centerId, results, ctxs, setlist) {
   const s = App.state;
   const centerIdol = findIdol(s, centerId);
-  const out = applyLiveResult(s, unit, setup, centerId, r);
+  const songs = setlist.map((id) => findSong(unit, id));
+  const out = applyLiveResult(s, unit, setup, centerId, results, setlist);
+  const avg = Math.round(out.total / results.length);
   let weekScenes;
   if (setup.isFinal) {
-    const { record } = graduateUnit(s, unit, r.total);
+    const { record } = graduateUnit(s, unit, avg);
     App.extraCast = record.members;
     weekScenes = finishWeek(s);
     s.stage = 'ending';
@@ -617,22 +706,28 @@ function finishLive(unit, setup, centerId, r, lctx) {
   saveGame();
   App.pendingScenes = weekScenes;
   if (out.win) playSE('win');
-  const j = r.judge;
   root().innerHTML = `
     <div class="screen live-result ${out.win ? 'win' : 'lose'}">
       <h1>${out.win ? 'WIN!' : 'LOSE…'}</h1>
-      <div class="vs"><div><b>${esc(unit.name)}</b><big>${r.total.toLocaleString()}</big></div><span>VS</span><div><b>${esc(setup.rival)}</b><big>${setup.rivalScore.toLocaleString()}</big></div></div>
+      <p>${esc(setup.venueName)}・${results.length}曲</p>
+      <div class="vs"><div><b>${esc(unit.name)}</b><big>${out.total.toLocaleString()}</big></div><span>VS</span><div><b>${esc(setup.rival)}</b><big>${out.rivalTotal.toLocaleString()}</big></div></div>
+      ${setup.isFinal ? `<p class="final-avg">決勝スコア(1曲平均):<b>${avg.toLocaleString()}</b></p>` : ''}
+      ${out.venueUp ? `<div class="venue-up">🏟 箱が「${esc(out.venueUp)}」にレベルアップ!</div>` : ''}
       <div class="breakdown card">
-        <h3>スコアの内訳(${r.mode === 'auto' ? 'おまかせ' : 'リズムゲーム'})</h3>
+        <h3>曲ごとのスコア</h3>
         <table>
-          <tr><td>Σ(基礎ステータス × ポジション係数)× 人数補正 ×${lctx.sizeMul} × バフ</td><td>${r.sigma.toLocaleString()}</td></tr>
-          <tr><td>× スケール ${C.STAT_SCORE_SCALE} × コンボ補正 ${r.comboMult.toFixed(3)}(最大 ${j.maxCombo} コンボ)</td><td>${r.base.toLocaleString()}</td></tr>
-          <tr><td>フィーバー加点(${j.feverCount}回、×${lctx.feverMult.toFixed(2)})</td><td>+${r.feverBonus.toLocaleString()}</td></tr>
-          <tr><td>判定ボーナス(Perfect ${j.perfect} / Good ${j.good} / Miss ${j.miss})</td><td>+${r.judgeBonus.toLocaleString()}</td></tr>
-          <tr class="sum"><td>ライブスコア</td><td>${r.total.toLocaleString()}</td></tr>
+          ${results.map((r, k) => `<tr><td>${k + 1}. 「${esc(songs[k].title)}」 Lv${songs[k].level}<small>${r.mode === 'auto' ? 'おまかせ' : 'リズム'}・P${r.judge.perfect}/G${r.judge.good}/M${r.judge.miss}</small></td><td class="${r.total >= setup.rivalPerSong ? 'up' : 'down'}">${r.total.toLocaleString()}</td></tr>`).join('')}
+          <tr class="sum"><td>合計(ライバル ${out.rivalTotal.toLocaleString()})</td><td>${out.total.toLocaleString()}</td></tr>
         </table>
+        ${results.map((r, k) => `<details><summary>${k + 1}曲目の計算式</summary><table>
+          <tr><td>Σ(基礎ステータス × ポジション係数)× 人数補正 ×${ctxs[k].sizeMul} × 曲Lv補正 ×${ctxs[k].songMul.toFixed(2)} × バフ</td><td>${r.sigma.toLocaleString()}</td></tr>
+          <tr><td>× スケール ${C.STAT_SCORE_SCALE} × コンボ補正 ${r.comboMult.toFixed(3)}(最大 ${r.judge.maxCombo} コンボ)</td><td>${r.base.toLocaleString()}</td></tr>
+          <tr><td>フィーバー加点(${r.judge.feverCount}回、×${ctxs[k].feverMult.toFixed(2)})</td><td>+${r.feverBonus.toLocaleString()}</td></tr>
+          <tr><td>判定ボーナス(Perfect ${r.judge.perfect} / Good ${r.judge.good} / Miss ${r.judge.miss})</td><td>+${r.judgeBonus.toLocaleString()}</td></tr>
+        </table></details>`).join('')}
       </div>
-      <p class="rewards">獲得:${out.rewards.join(' / ')}</p>
+      <p class="rewards">獲得:${out.rewards.map(esc).join(' / ')}</p>
+      <p class="hint">今回の演奏曲Lv合計:${out.setLv}${!setup.isFinal && nextVenue(unit) ? `(次の箱「${nextVenue(unit).name}」は ファン${nextVenue(unit).needFans.toLocaleString()}・演奏曲Lv合計${nextVenue(unit).needSongLv})` : ''}</p>
       <div class="result-face">${avatarSVG(centerIdol, 80)}<p>「${esc(idolLine(centerIdol, out.win ? 'win' : 'lose'))}」</p></div>
       <button class="btn big" id="b-next">${setup.isFinal ? '結果発表へ' : '次へ'}</button>
     </div>`;
@@ -665,7 +760,8 @@ function renderEnding() {
         <p>${rec.gen}期生「${esc(rec.name)}」(${rec.members.length}人)</p>
         <div class="unit-row">${rec.members.map((i) => `<div class="mini">${avatarSVG(i, 80)}<span>${esc(i.name)}</span></div>`).join('')}</div>
         <div class="card end-stats">
-          <div>決勝スコア <b>${rec.finalScore.toLocaleString()}</b>(True基準 ${C.ENDING.TRUE_SCORE.toLocaleString()} / 足切り ${C.ENDING.CUTOFF_SCORE.toLocaleString()})</div>
+          <div>卒業時の箱 <b>${esc(rec.venueName || '')}</b></div>
+          <div>決勝スコア(1曲平均) <b>${rec.finalScore.toLocaleString()}</b>(True基準 ${C.ENDING.TRUE_SCORE.toLocaleString()} / 足切り ${C.ENDING.CUTOFF_SCORE.toLocaleString()})</div>
           <div>ファン数 <b>${rec.fans.toLocaleString()}</b>(目標 ${C.ENDING.FANS_TARGET.toLocaleString()})</div>
           <div>絆 <b>${rec.bond}</b>(True基準 ${C.ENDING.BOND_TRUE})</div>
           <div>注力の偏り <b>${share}%</b>(${Math.round(rec.bias.threshold * 100)}%以上で偏り)/ 本音イベント <b>${rec.members.filter((i) => i.honne).length}/${rec.members.length}</b></div>

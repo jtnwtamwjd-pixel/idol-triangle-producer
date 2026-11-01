@@ -172,11 +172,15 @@ function formUnit(state, ids, unitName) {
     startYear: year,
     bond: C.START_BOND,
     fans: C.START_FANS,
-    livesDone: 0,
     liveResults: [],
+    venue: 0,
+    lastSetLv: 0,
+    songs: [],
+    songCount: 0,
   };
   state.nextUnitNo++;
   state.units.push(unit);
+  for (let k = 0; k < C.SONGS_AT_FORMATION; k++) addSong(state, unit, k === 0 ? 'デビュー曲' : 'カップリング');
   state.usedNames = state.usedNames.concat(state.candidates.map((c) => c.name));
   state.candidates = [];
   state.phase = 'home';
@@ -247,6 +251,7 @@ function lessonGain(state, idol, stat, mul, rng) {
 
 function actLesson(state, unit, opts, rng, res) {
   const L = C.LESSON;
+  if (opts.stat === 'song') return actSongPractice(state, unit, opts, rng, res);
   const stat = opts.stat || 'tech';
   res.title = `${STAT_NAMES[stat]}レッスン`;
   const solo = opts.target && opts.target !== 'unit';
@@ -269,6 +274,21 @@ function actLesson(state, unit, opts, rng, res) {
     addBond(unit, L.UNIT_BOND);
     res.log.push(`絆 +${L.UNIT_BOND}`);
   }
+}
+
+// 持ち歌練習:ユニット全員で1曲を練習して曲の経験値を上げる(能力は少しだけ上がる)
+function actSongPractice(state, unit, opts, rng, res) {
+  const L = C.LESSON;
+  const song = findSong(unit, opts.songId) || unit.songs[0];
+  res.title = `持ち歌練習「${song.title}」`;
+  for (const idol of unit.members) {
+    for (const k of ['tech', 'sense', 'visual']) addStat(idol, k, L.UNIT_SUB_GAIN);
+    addStamina(idol, -L.UNIT_STAMINA);
+    res.lines.push({ speaker: idol.id, text: idolLine(idol, 'lesson', rng) });
+  }
+  const up = addSongExp(song, C.SONG_EXP_PRACTICE);
+  addBond(unit, L.UNIT_BOND);
+  res.log.push(`「${song.title}」の経験値 +${C.SONG_EXP_PRACTICE}${up ? `(Lv${song.level}にアップ!)` : `(Lv${song.level})`}`, `絆 +${L.UNIT_BOND}`);
 }
 
 function workMoneyMul(state) {
@@ -487,7 +507,7 @@ const RANDOM_EVENTS = [
   {
     id: 'rival', weight: 2,
     make: (s, u) => {
-      const rival = C.RIVALS[Math.min(u.livesDone, C.RIVALS.length - 2)].name;
+      const rival = (C.VENUES[(u.venue || 0) + 1] || C.FINAL).rival;
       return makeScene(`ライバルの挑発(${u.name})`, null, [['n', `テレビ局の廊下で「${rival}」とすれ違った。`], ['n', '「弱小事務所は、せいぜい頑張ってね」']], [
         { label: '「受けて立つ」と言い返す', apply: () => { u.members.forEach((i) => addCondition(i, 1)); addBond(u, 3); return '全員の目に火がついた!(調子 +1、絆 +3)'; } },
         { label: '笑って受け流す', apply: (st) => { addFame(st, 2); return '大人の対応が記者の目に留まった。(知名度 +2)'; } },
@@ -601,6 +621,12 @@ function advanceWeek(state) {
   state.liveUnitId = null;
   state.stage = 'plan';
   if (weekInYear(state.week) === 1) {
+    for (const u of state.units) {
+      for (let k = 0; k < C.SONG_EACH_YEAR; k++) {
+        const song = addSong(state, u, '周年シングル');
+        if (song) pushLog(state, `${u.name}に周年シングル「${song.title}」が届いた`);
+      }
+    }
     state.candidates = generateCandidates(state.seed, yearOf(state.week), state._metaLoopBonus || 0, state.usedNames);
     ensureCharacters(state);
     state.phase = 'scout';
@@ -674,25 +700,79 @@ function useItem(state, key, target) {
   return { ok: true, scenes: idol ? checkEpisodes(state, idol) : [] };
 }
 
+// ---------- 持ち歌 ----------
+function songLevelFromExp(exp) {
+  let lv = 1;
+  C.SONG_LV_EXP.forEach((need, i) => { if (exp >= need) lv = i + 1; });
+  return Math.min(lv, C.SONG_LV_MAX);
+}
+function addSong(state, unit, label) {
+  if (unit.songs.length >= C.SONG_MAX) return null;
+  const n = (unit.songCount || 0) + 1;
+  unit.songCount = n;
+  const seed = state.seed + ':rep:' + unit.id + ':' + n;
+  const g = generateSong(seed, { liveIndex: Math.min(6, Math.floor(n / 2)) });
+  const song = { id: unit.id + 's' + n, songNo: n, seed, title: g.title, bpm: g.bpm, mode: g.mode, level: 1, exp: 0, plays: 0, label: label || '' };
+  unit.songs.push(song);
+  return song;
+}
+function findSong(unit, id) { return unit.songs.find((x) => x.id === id) || null; }
+function addSongExp(song, v) {
+  const before = song.level;
+  song.exp += v;
+  song.level = songLevelFromExp(song.exp);
+  return song.level > before;
+}
+function newSongCost(state, unit) {
+  return unit.members.some((i) => i.off === 'songwriting') ? Math.round(C.NEW_SONG_COST / 2) : C.NEW_SONG_COST;
+}
+function buyNewSong(state, unitId) {
+  const unit = findUnit(state, unitId);
+  if (!unit) return { ok: false, why: 'ユニットがありません' };
+  if (unit.songs.length >= C.SONG_MAX) return { ok: false, why: `持ち歌は${C.SONG_MAX}曲まで` };
+  const cost = newSongCost(state, unit);
+  if (state.money < cost) return { ok: false, why: '資金不足' };
+  state.money -= cost;
+  const song = addSong(state, unit, '新曲');
+  pushLog(state, `${unit.name}の新曲「${song.title}」が完成した`);
+  return { ok: true, song };
+}
+
 // ---------- ライブ ----------
+const venueOf = (unit) => C.VENUES[unit.venue || 0];
+// 次の箱(最上位なら null)
+function nextVenue(unit) { return C.VENUES[(unit.venue || 0) + 1] || null; }
+
 function liveSetup(state, unit) {
   const l = liveOfWeek(state, state.week);
   const isFinal = !!(l && l.type === 'final' && l.unitId === unit.id);
-  const tier = isFinal ? C.RIVALS.length - 1 : Math.min(unit.livesDone, C.RIVALS.length - 2);
-  const songSeed = state.seed + ':song:' + state.week + ':' + unit.id;
+  const V = isFinal ? C.FINAL : venueOf(unit);
+  const songSeed = state.seed + ':live:' + state.week + ':' + unit.id;
   const rngR = makeRng(songSeed + ':rival');
-  const R = C.RIVALS[tier];
-  const rivalScore = Math.round(R.score * (1 - C.RIVAL_VARIANCE + rngR() * C.RIVAL_VARIANCE * 2));
-  return { unitId: unit.id, tier, liveNo: unit.livesDone + 1, isFinal, rival: R.name, rivalScore, songSeed };
+  const rivalPerSong = Math.round(V.rivalScore * (1 - C.RIVAL_VARIANCE + rngR() * C.RIVAL_VARIANCE * 2));
+  const maxSongs = Math.min(isFinal ? C.FINAL.songs : V.maxSongs, unit.songs.length);
+  const minSongs = isFinal ? maxSongs : 1;
+  return {
+    unitId: unit.id, isFinal, venue: unit.venue || 0, venueName: isFinal ? C.FINAL.name : V.name, cap: V.cap || null,
+    liveNo: unit.liveResults.length + 1, rival: V.rival, rivalPerSong, maxSongs, minSongs, density: V.density, fanMul: V.fanMul, money: V.money, songSeed,
+  };
 }
 
-// result: computeLiveScore の戻り値
-function applyLiveResult(state, unit, setup, centerId, result) {
-  const win = result.total >= setup.rivalScore;
+// 1曲ぶんの楽曲と譜面(持ち歌のシードから生成するので、同じ曲はいつも同じ曲・同じ譜面)
+function songChart(song, setup) {
+  const g = generateSong(song.seed, { liveIndex: Math.min(6, Math.floor((song.songNo || 0) / 2)) });
+  return { song: g, chart: generateChart(g, setup.density) };
+}
+
+// results: 曲ごとの computeLiveScore の戻り値、setlist: 演奏した持ち歌のID(同じ順)
+function applyLiveResult(state, unit, setup, centerId, results, setlist) {
+  const total = results.reduce((x, r) => x + r.total, 0);
+  const rivalTotal = setup.rivalPerSong * results.length;
+  const win = total >= rivalTotal;
   const rewards = [];
-  const fanGain = addFans(state, unit, result.total * (win ? C.LIVE_FANS_WIN_RATE : C.LIVE_FANS_LOSE_RATE));
+  const fanGain = addFans(state, unit, total * (win ? C.LIVE_FANS_WIN_RATE : C.LIVE_FANS_LOSE_RATE) * setup.fanMul);
   rewards.push(`ファン +${fanGain.toLocaleString()}`);
-  const money = win ? C.LIVE_MONEY_WIN : C.LIVE_MONEY_LOSE;
+  const money = Math.round(setup.money * (win ? 1 : C.LIVE_MONEY_LOSE_RATE));
   state.money += money;
   rewards.push(`¥${money.toLocaleString()}`);
   addBond(unit, win ? C.LIVE_BOND_WIN : C.LIVE_BOND_LOSE);
@@ -700,19 +780,39 @@ function applyLiveResult(state, unit, setup, centerId, result) {
   addFame(state, win ? 5 : 2);
   const center = findIdol(state, centerId);
   center.focus += C.LIVE_FOCUS_CENTER;
-  unit.members.forEach((i) => { addStamina(i, -C.LIVE_STAMINA); addAffection(i, win ? 3 : 1); });
+  unit.members.forEach((i) => { addStamina(i, -C.LIVE_STAMINA_PER_SONG * results.length); addAffection(i, win ? 3 : 1); });
+  // 演奏した曲の経験値
+  const lvUps = [];
+  setlist.forEach((id, k) => {
+    const song = findSong(unit, id);
+    if (!song) return;
+    song.plays++;
+    const up = addSongExp(song, C.SONG_EXP_PLAY + (results[k].total >= setup.rivalPerSong ? C.SONG_EXP_WIN : 0));
+    if (up) lvUps.push(`「${song.title}」Lv${song.level}`);
+  });
+  if (lvUps.length) rewards.push('曲レベルアップ:' + lvUps.join('、'));
+  // 箱レベル:ファン数と、今回の演奏曲レベルの合計で判定
+  const setLv = setlist.reduce((x, id) => x + ((findSong(unit, id) || {}).level || 0), 0);
+  unit.lastSetLv = setLv;
+  let venueUp = null;
+  const nv = nextVenue(unit);
+  if (!setup.isFinal && nv && unit.fans >= nv.needFans && setLv >= nv.needSongLv) {
+    unit.venue = (unit.venue || 0) + 1;
+    venueUp = nv.name;
+    rewards.push(`箱が「${nv.name}」にレベルアップ!`);
+    pushLog(state, `${unit.name}の箱が「${nv.name}」(${nv.cap.toLocaleString()}人)になった`);
+  }
   const scenes = [];
-  const reward = C.LIVE_COSTUME_REWARD[setup.tier];
-  if (win && reward && !state.costumes.includes(reward)) {
+  const reward = C.LIVE_COSTUME_REWARD[setup.venue];
+  if (!setup.isFinal && win && reward && !state.costumes.includes(reward)) {
     state.costumes.push(reward);
     rewards.push(`衣装「${COSTUMES[reward].name}」`);
   }
   if (win && !center.accepted) scenes.push(acceptScene(state, center));
-  unit.livesDone++;
-  unit.liveResults.push({ week: state.week, tier: setup.tier, score: result.total, rival: setup.rivalScore, win, center: centerId, mode: result.mode, final: setup.isFinal });
-  pushLog(state, `${unit.name} ${setup.isFinal ? '卒業ライブ(決勝)' : `ライブ${setup.liveNo}`}:${result.total.toLocaleString()}点 vs ${setup.rival} ${setup.rivalScore.toLocaleString()}点 → ${win ? '勝利!' : '敗北…'}`);
+  unit.liveResults.push({ week: state.week, venue: setup.venue, venueName: setup.venueName, songs: results.length, score: total, rival: rivalTotal, win, center: centerId, final: setup.isFinal, setLv });
+  pushLog(state, `${unit.name} ${setup.venueName}(${results.length}曲):${total.toLocaleString()}点 vs ${setup.rival} ${rivalTotal.toLocaleString()}点 → ${win ? '勝利!' : '敗北…'}`);
   scenes.push(...checkRelationEvents(state));
-  return { win, rewards, scenes };
+  return { win, total, rivalTotal, rewards, scenes, venueUp, setLv };
 }
 
 // 決勝のあと:エンディングを判定し、ユニットを卒業させる
@@ -722,7 +822,7 @@ function graduateUnit(state, unit, finalScore) {
     gen: unit.gen, name: unit.name, ending: ev.id, finalScore, fans: unit.fans, bond: unit.bond,
     week: state.week, members: unit.members.map((i) => ({ ...i, stats: { ...i.stats }, look: { ...i.look } })),
     wins: unit.liveResults.filter((l) => l.win).length, losses: unit.liveResults.filter((l) => !l.win).length,
-    bias: ev.bias,
+    bias: ev.bias, venue: unit.venue || 0, venueName: C.VENUES[unit.venue || 0].name,
   };
   state.alumni.push(record);
   state.units = state.units.filter((u) => u !== unit);
