@@ -2,17 +2,22 @@
 // 調整用定数 — バランス調整はこのファイルだけで行えるようにする
 // ============================================================
 const C = {
-  SAVE_KEY: 'idolPro_save_v1',
+  SAVE_KEY: 'idolPro_save_v2', // v1(1ユニット制)のセーブは読み込まない
   META_KEY: 'idolPro_meta_v1',
   SETTINGS_KEY: 'idolPro_settings_v1',
 
   // ---- 期間 ----
-  YEARS: 3,
   WEEKS_PER_YEAR: 16,
-  LIVE_WEEKS: [8, 16, 22, 28, 34, 40, 48], // 通算週。最後が決勝
+  CAREER_YEARS: 3, // ユニットの活動期間。最終年の最終週が卒業ライブ(決勝)
+  // 年ごとのライブ週(年内の週)。最終週は、卒業するユニットがいれば決勝になる
+  // 1期生の3年間でちょうど全7回(2 + 2 + 3)
+  LIVE_WEEKS_BY_YEAR: { 1: [8, 16], 2: [8, 16], default: [5, 10, 16] },
   CANDIDATES_MIN: 6,
   CANDIDATES_MAX: 9,
-  UNIT_SIZE: 3,
+  // ユニットの人数:下限 UNIT_MIN、上限 = min(UNIT_MAX, 候補生の数 − UNIT_SIZE_OFFSET)
+  UNIT_MIN: 2,
+  UNIT_MAX: 5,
+  UNIT_SIZE_OFFSET: 3,
 
   // ---- 初期値 ----
   START_MONEY: 200000,
@@ -94,13 +99,15 @@ const C = {
 
   // ---- ライブ:スコア計算式 ----
   POSITION_COEF: { center: 1.5, side: 1.0 },
+  // 人数補正:Σ(基礎ステータス × ポジション係数)にかける。3人組を基準に、人数が違っても公平にする
+  SIZE_SCORE_MUL: { 1: 2.2, 2: 1.35, 3: 1.0, 4: 0.82, 5: 0.7 },
   STAT_SCORE_SCALE: 28,
   COMBO_BONUS_MAX: 0.5,  // コンボ補正の最大(+50%)
   COMBO_CAP: 100,        // このコンボ数で補正が最大になる
   JUDGE_BONUS: { perfect: 40, good: 20, miss: 0 },
   SIDE_BUFF: {
     BASE_CHANCE: 0.25, BOND_CHANCE: 0.004, AFFECTION_CHANCE: 0.002,
-    SCORE_UP: 0.08,          // サイド1人につき+8%
+    SCORE_UP: 0.08,          // サイド1人につき+8%(サイドが3人以上なら、合計 +16% を人数で分ける)
     JUDGE_WIDEN_MS: 25,      // 判定緩和:Good判定の幅を広げる
     JUDGE_MISS_REDUCE: 0.4,  // おまかせ時:Miss率を40%減らす
   },
@@ -128,7 +135,7 @@ const C = {
     { name: 'ミルキーウェイ急行', score: 35000 },
     { name: 'Noir Crown', score: 42000 },
     { name: 'Re:Vival', score: 48000 },
-    { name: 'GRAND ECLIPSE', score: 55000 },
+    { name: 'GRAND ECLIPSE', score: 75000 },
   ],
   RIVAL_VARIANCE: 0.06,
   LIVE_FANS_WIN_RATE: 0.35,  // スコア × 倍率 = ファン増加
@@ -139,19 +146,20 @@ const C = {
   LIVE_BOND_LOSE: 2,
   LIVE_STAMINA: 20,
   LIVE_FOCUS_CENTER: 4,
-  LIVE_COSTUME_REWARD: { 2: 'wafuu', 4: 'star' }, // ライブの番号(0始まり)→ 勝利で入手できる衣装
+  LIVE_COSTUME_REWARD: { 2: 'wafuu', 4: 'star' }, // ライバルの段階(0始まり)→ 勝利で入手できる衣装
 
   // ---- 楽曲生成 ----
   SONG: { BPM_MIN: 112, BPM_MAX: 150, BPM_LIVE_STEP: 3 },
-  CHART_DENSITY: [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85], // ライブごとの譜面密度
+  CHART_DENSITY: [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85], // ライバルの段階ごとの譜面密度
 
   // ---- エンディング(仮の値) ----
   ENDING: {
     FANS_TARGET: 80000,
     BOND_TRUE: 75,
-    TRUE_SCORE: 60000,
-    CUTOFF_SCORE: 35000,
-    BIAS_SHARE: 0.6,        // 1人の注力ポイントの割合
+    TRUE_SCORE: 80000,
+    CUTOFF_SCORE: 45000,
+    BIAS_SHARE: 0.6,        // 1人の注力ポイントの割合(3人組の場合)
+    BIAS_SHARE_BY_SIZE: { 1: 1.01, 2: 0.75, 3: 0.6, 4: 0.5, 5: 0.45 }, // 人数ごとの基準(1人は判定しない)
     BIAS_MIN_TOTAL: 30,     // 偏りの判定に必要な注力ポイントの合計
     SECRET_ENABLED: true,
     SECRET_BEFORE_TRUE: true,

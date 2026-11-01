@@ -1,5 +1,12 @@
 // ============================================================
 // ゲーム進行ロジック(DOMに依存しない。テストからも読み込む)
+//
+// 複数ユニット制:
+//   ・毎年1週目に候補生が入所し、新しいユニットを1つ結成する(2〜5人)
+//   ・ユニットの活動期間は3年。3年目の16週目に卒業ライブ(グランプリ決勝)を行い、
+//     そのユニットのエンディングを判定して卒業する。ゲームはその後も続く
+//   ・毎週、活動中のユニットごとに1つずつ行動を選ぶ
+//   ・通常のライブは、出場するユニットを毎回選ぶ
 // ============================================================
 
 // ---------- 状態 ----------
@@ -7,26 +14,27 @@ function newGameState(seed, meta) {
   meta = meta || defaultMeta();
   const loopStack = Math.min(meta.loops, C.LOOP.MAX_STACK);
   const s = {
-    version: 1,
+    version: 2,
     seed: String(seed),
     week: 1,
-    phase: 'scout',
+    phase: 'scout',     // scout(結成)/ home(週の計画)
+    stage: 'plan',      // plan → live(ライブ待ち)→ ending(エンディング表示待ち)
     money: C.START_MONEY + loopStack * C.LOOP.MONEY_BONUS,
-    fans: C.START_FANS,
     fame: C.START_FAME,
-    bond: C.START_BOND,
-    unitName: '',
-    unit: [],
+    units: [],
+    alumni: [],         // 卒業・解散したユニットの記録
     candidates: [],
+    plan: {},           // { unitId: { action, opts } }
+    liveUnitId: null,   // 今週の通常ライブに出るユニット
+    pendingEnding: null,
+    nextUnitNo: 1,
     invest: { lesson: 0, pr: 0, dorm: 0, staff: 0, studio: 0 },
     items: { drink: 0, charm: 0, gift: 0, camp: 0, supple: 0 },
     costumes: Array.from(new Set(['school'].concat(meta.costumes || []))),
-    liveResults: [],
     log: [],
     loop: meta.loops,
     usedNames: [],
     seenEvents: {},
-    ending: null,
     _metaLoopBonus: loopStack * C.LOOP.STAT_BONUS,
   };
   s.candidates = generateCandidates(s.seed, 1, s._metaLoopBonus, s.usedNames);
@@ -40,13 +48,52 @@ function defaultMeta() {
 
 const yearOf = (week) => Math.floor((week - 1) / C.WEEKS_PER_YEAR) + 1;
 const weekInYear = (week) => ((week - 1) % C.WEEKS_PER_YEAR) + 1;
-const totalWeeks = () => C.YEARS * C.WEEKS_PER_YEAR;
-const liveIndexOfWeek = (week) => C.LIVE_WEEKS.indexOf(week);
+
+// ---------- ユニット ----------
+function allIdols(state) { return state.units.flatMap((u) => u.members); }
+function findIdol(state, id) {
+  return allIdols(state).find((i) => i.id === id) || state.candidates.find((c) => c.id === id) || null;
+}
+function findUnit(state, id) { return state.units.find((u) => u.id === id) || null; }
+function unitOfIdol(state, idolId) { return state.units.find((u) => u.members.some((i) => i.id === idolId)) || null; }
+// ユニットの何年目か(1〜3)
+function careerYear(unit, week) { return yearOf(week) - unit.startYear + 1; }
+function unitSizeLimits(candidateCount) {
+  return { min: C.UNIT_MIN, max: Math.max(C.UNIT_MIN, Math.min(C.UNIT_MAX, candidateCount - C.UNIT_SIZE_OFFSET)) };
+}
+function unitLabel(unit) { return `${unit.gen}期生「${unit.name}」`; }
+
+// ---------- ライブの予定 ----------
+function liveWeeksOfYear(year) { return C.LIVE_WEEKS_BY_YEAR[year] || C.LIVE_WEEKS_BY_YEAR.default; }
+// その年に卒業するユニット(3年目の最終週に決勝)
+function graduatingUnit(state, year) {
+  return state.units.find((u) => year - u.startYear + 1 === C.CAREER_YEARS) || null;
+}
+// 戻り値:null / { type: 'regular' } / { type: 'final', unitId }
+function liveOfWeek(state, week) {
+  const y = yearOf(week), w = weekInYear(week);
+  if (!liveWeeksOfYear(y).includes(w)) return null;
+  if (w === C.WEEKS_PER_YEAR) {
+    const g = graduatingUnit(state, y);
+    if (g) return { type: 'final', unitId: g.id };
+  }
+  return { type: 'regular' };
+}
 function nextLive(state) {
-  const idx = C.LIVE_WEEKS.findIndex((w) => w >= state.week);
-  return idx < 0 ? null : { index: idx, week: C.LIVE_WEEKS[idx], inWeeks: C.LIVE_WEEKS[idx] - state.week };
+  for (let w = state.week; w < state.week + C.WEEKS_PER_YEAR * 2; w++) {
+    const l = liveOfWeek(state, w);
+    if (l) return Object.assign({ week: w, inWeeks: w - state.week }, l);
+  }
+  return null;
+}
+// 今週ライブに出るユニット(未定なら null)
+function liveUnitThisWeek(state) {
+  const l = liveOfWeek(state, state.week);
+  if (!l) return null;
+  return findUnit(state, l.type === 'final' ? l.unitId : state.liveUnitId);
 }
 
+// ---------- 事務所 ----------
 function officeScale(state) {
   return 1 + Object.values(state.invest).reduce((a, b) => a + b, 0);
 }
@@ -57,22 +104,22 @@ function officeRankIndex(state) {
   return idx;
 }
 const officeRankName = (state) => C.OFFICE_RANKS[officeRankIndex(state)].name;
+const totalFans = (state) => state.units.reduce((a, u) => a + u.fans, 0);
 
-function findIdol(state, id) { return state.unit.find((i) => i.id === id); }
 function pushLog(state, text) {
   state.log.unshift(`[${yearOf(state.week)}年目${weekInYear(state.week)}週] ${text}`);
-  if (state.log.length > 40) state.log.length = 40;
+  if (state.log.length > 60) state.log.length = 60;
 }
 function weekRng(state, tag) { return makeRng(state.seed + ':w' + state.week + ':' + tag); }
 
 // ---------- 値の増減ヘルパー ----------
 function addStamina(idol, v) { idol.stamina = clamp(Math.round(idol.stamina + v), 0, idol.staminaMax); }
 function addCondition(idol, v) { idol.condition = clamp(idol.condition + v, -2, 2); }
-function addBond(state, v) { state.bond = clamp(Math.round(state.bond + v), 0, C.BOND_MAX); }
+function addBond(unit, v) { unit.bond = clamp(Math.round(unit.bond + v), 0, C.BOND_MAX); }
 function addFame(state, v) { state.fame = clamp(state.fame + v * (1 + state.invest.pr * INVESTMENTS.pr.effect), 0, C.FAME_MAX); }
-function addFans(state, v) {
+function addFans(state, unit, v) {
   const gain = v > 0 ? v * (1 + state.invest.pr * INVESTMENTS.pr.effect) : v;
-  state.fans = Math.max(0, Math.round(state.fans + gain));
+  unit.fans = Math.max(0, Math.round(unit.fans + gain));
   return Math.round(gain);
 }
 function addStat(idol, stat, v) { idol.stats[stat] = clamp(Math.round((idol.stats[stat] + v) * 10) / 10, 0, C.STAT_MAX); }
@@ -112,42 +159,76 @@ function withVideo(scene, idol, kind) {
   return scene;
 }
 
-// ---------- 候補生の選択 ----------
+// ---------- 結成 ----------
 function formUnit(state, ids, unitName) {
-  if (ids.length !== C.UNIT_SIZE) throw new Error('3人選んでください');
-  state.unit = ids.map((id) => state.candidates.find((c) => c.id === id));
-  state.unitName = unitName || UNIT_NAME_SUGGEST[0];
+  const lim = unitSizeLimits(state.candidates.length);
+  if (ids.length < lim.min || ids.length > lim.max) throw new Error(`${lim.min}〜${lim.max}人で結成してください`);
+  const year = yearOf(state.week);
+  const unit = {
+    id: 'u' + state.nextUnitNo,
+    gen: state.nextUnitNo,
+    name: unitName || UNIT_NAME_SUGGEST[(state.nextUnitNo - 1) % UNIT_NAME_SUGGEST.length],
+    members: ids.map((id) => state.candidates.find((c) => c.id === id)),
+    startYear: year,
+    bond: C.START_BOND,
+    fans: C.START_FANS,
+    livesDone: 0,
+    liveResults: [],
+  };
+  state.nextUnitNo++;
+  state.units.push(unit);
   state.usedNames = state.usedNames.concat(state.candidates.map((c) => c.name));
   state.candidates = [];
   state.phase = 'home';
-  pushLog(state, `ユニット「${state.unitName}」を結成した!`);
+  pushLog(state, `${unitLabel(unit)}を結成した!(${unit.members.length}人)`);
+  return unit;
 }
 
-function swapMember(state, outId, inId) {
-  const idx = state.unit.findIndex((i) => i.id === outId);
-  const cand = state.candidates.find((c) => c.id === inId);
-  if (idx < 0 || !cand) return;
-  const out = state.unit[idx];
-  state.unit[idx] = cand;
-  addBond(state, -15);
-  pushLog(state, `${out.name}が卒業し、${cand.name}が加入した。(絆 -15)`);
-}
-
-function finishScouting(state) {
-  state.usedNames = state.usedNames.concat(state.candidates.map((c) => c.name));
-  state.candidates = [];
-  state.phase = 'home';
-}
-
-// ---------- 週の行動 ----------
+// ---------- 週の計画と実行 ----------
 // opts: { target: 'unit' | idolId | 'president', stat: 'tech'|'sense'|'visual' }
-function doAction(state, action, opts) {
+function setPlan(state, unitId, action, opts) { state.plan[unitId] = { action, opts: opts || {} }; }
+function setLiveUnit(state, unitId) {
+  state.liveUnitId = unitId;
+  delete state.plan[unitId];
+}
+// 行動が必要なユニット(今週ライブに出るユニット以外)
+function actingUnits(state) {
+  const lu = liveUnitThisWeek(state);
+  return state.units.filter((u) => !lu || u.id !== lu.id);
+}
+function canRunWeek(state) {
+  const l = liveOfWeek(state, state.week);
+  if (l && l.type === 'regular' && !findUnit(state, state.liveUnitId)) return { ok: false, why: 'ライブに出るユニットを選んでください' };
+  const missing = actingUnits(state).filter((u) => !state.plan[u.id]);
+  if (missing.length) return { ok: false, why: `${missing.map((u) => u.name).join('、')}の行動を選んでください` };
+  return { ok: true };
+}
+// 各ユニットの行動を実行。ライブがあれば stage を 'live' にする
+function runActions(state) {
+  const results = [];
+  for (const u of actingUnits(state)) {
+    const p = state.plan[u.id];
+    results.push(doAction(state, u, p.action, p.opts));
+  }
+  state.plan = {};
+  state.stage = liveUnitThisWeek(state) ? 'live' : 'plan';
+  return results;
+}
+// 週末処理をして次の週へ。戻り値:再生するシーン
+function finishWeek(state) {
+  const scenes = endWeek(state);
+  advanceWeek(state);
+  return scenes;
+}
+
+function doAction(state, unit, action, opts) {
   opts = opts || {};
-  const rng = weekRng(state, 'act');
-  const res = { action, title: '', lines: [], log: [] };
+  const rng = weekRng(state, 'act:' + unit.id);
+  const res = { action, unitId: unit.id, title: '', lines: [], log: [] };
   const fns = { lesson: actLesson, work: actWork, sns: actSns, outing: actOuting, rest: actRest };
-  fns[action](state, opts, rng, res);
-  res.log.forEach((l) => pushLog(state, l));
+  fns[action](state, unit, opts, rng, res);
+  res.title = `${unit.name}|${res.title}`;
+  res.log.forEach((l) => pushLog(state, `${unit.name}:${l}`));
   return res;
 }
 
@@ -164,12 +245,12 @@ function lessonGain(state, idol, stat, mul, rng) {
   return { gain: Math.round(g * 10) / 10, failed };
 }
 
-function actLesson(state, opts, rng, res) {
+function actLesson(state, unit, opts, rng, res) {
   const L = C.LESSON;
   const stat = opts.stat || 'tech';
   res.title = `${STAT_NAMES[stat]}レッスン`;
   const solo = opts.target && opts.target !== 'unit';
-  for (const idol of state.unit) {
+  for (const idol of unit.members) {
     if (solo && idol.id !== opts.target) {
       addStamina(idol, L.SOLO_OTHERS_RECOVER);
       continue;
@@ -182,11 +263,11 @@ function actLesson(state, opts, rng, res) {
     if (failed) addCondition(idol, -1);
     if (solo) idol.focus += L.SOLO_FOCUS;
     res.lines.push({ speaker: idol.id, text: failed ? idolLine(idol, 'tired', rng) : idolLine(idol, 'lesson', rng) });
-    res.log.push(`${idol.name}:${STAT_NAMES[stat]} +${gain}${failed ? '(体力不足で失敗気味)' : ''}`);
+    res.log.push(`${idol.name}の${STAT_NAMES[stat]} +${gain}${failed ? '(体力不足で失敗気味)' : ''}`);
   }
   if (!solo) {
-    addBond(state, L.UNIT_BOND);
-    res.log.push(`ユニットの絆 +${L.UNIT_BOND}`);
+    addBond(unit, L.UNIT_BOND);
+    res.log.push(`絆 +${L.UNIT_BOND}`);
   }
 }
 
@@ -194,22 +275,22 @@ function workMoneyMul(state) {
   return (1 + state.invest.staff * INVESTMENTS.staff.effect) * (1 + state.fame * C.WORK.FAME_MONEY_MUL);
 }
 
-function actWork(state, opts, rng, res) {
+function actWork(state, unit, opts, rng, res) {
   const W = C.WORK;
   if (opts.target === 'president') {
     const job = rng.pick(PRESIDENT_JOBS);
     const money = Math.round(W.PRESIDENT_MONEY * (1 + (officeScale(state) - 1) * W.PRESIDENT_SCALE_MUL) * (0.9 + rng() * 0.2));
     state.money += money;
-    state.unit.forEach((i) => addStamina(i, W.PRESIDENT_IDOL_RECOVER));
+    unit.members.forEach((i) => addStamina(i, W.PRESIDENT_IDOL_RECOVER));
     res.title = '社長の仕事:' + job;
     res.lines.push({ speaker: 'p', text: `今週は俺が稼ぐ番だ。「${job}」に行ってくる。` });
-    res.log.push(`社長の仕事で ¥${money.toLocaleString()} を稼いだ。アイドルたちは自主練(体力 +${W.PRESIDENT_IDOL_RECOVER})`);
+    res.log.push(`社長の仕事で ¥${money.toLocaleString()} を稼いだ。メンバーは自主練(体力 +${W.PRESIDENT_IDOL_RECOVER})`);
     return;
   }
   const solo = opts.target && opts.target !== 'unit';
   const job = rng.pick(JOBS);
   res.title = 'お仕事:' + job.name;
-  const members = solo ? [findIdol(state, opts.target)] : state.unit;
+  const members = solo ? [findIdol(state, opts.target)] : unit.members;
   let money = (solo ? W.SOLO_MONEY : W.UNIT_MONEY) * workMoneyMul(state);
   let fans = solo ? W.SOLO_FANS : W.UNIT_FANS;
   let matched = false;
@@ -221,7 +302,7 @@ function actWork(state, opts, rng, res) {
     addStamina(idol, -(solo ? W.SOLO_STAMINA : W.UNIT_STAMINA));
     if (failed) { addCondition(idol, -1); money *= 0.8; } else if (rng() < 0.3) addCondition(idol, 1);
     if (solo) { idol.focus += W.SOLO_FOCUS; addAffection(idol, W.SOLO_AFFECTION); }
-    fans += idol.stats.talk * 2;
+    fans += idol.stats.talk * 2 * (solo ? 1 : 3 / unit.members.length);
     res.lines.push({ speaker: idol.id, text: failed ? idolLine(idol, 'tired', rng) : idolLine(idol, 'work', rng) });
   }
   if (matched) {
@@ -231,45 +312,45 @@ function actWork(state, opts, rng, res) {
   if (job.spec === 'culture' && matched) addFame(state, W.FAME);
   money = Math.round(money * (0.9 + rng() * 0.2));
   state.money += money;
-  const gotFans = addFans(state, fans * (1 + state.fame / 50));
+  const gotFans = addFans(state, unit, fans * (1 + state.fame / 50));
   addFame(state, W.FAME);
   res.log.push(`報酬 ¥${money.toLocaleString()}、ファン +${gotFans}`);
 }
 
-function actSns(state, opts, rng, res) {
+function actSns(state, unit, opts, rng, res) {
   const S = C.SNS;
   const solo = opts.target && opts.target !== 'unit';
-  const members = solo ? [findIdol(state, opts.target)] : state.unit;
+  const members = solo ? [findIdol(state, opts.target)] : unit.members;
   res.title = solo ? `SNS:${members[0].name}の投稿` : 'SNS:ユニット投稿';
   let fans = solo ? S.SOLO_FANS : S.UNIT_FANS;
+  const avgVisual = members.reduce((a, i) => a + i.stats.visual, 0) / members.length;
+  fans *= 1 + avgVisual / S.VISUAL_DIV * 2;
   let flame = false;
   for (const idol of members) {
-    fans *= 1 + idol.stats.visual / S.VISUAL_DIV;
-    if (idol.off === 'variety') fans *= 1.3;
-    if (idol.personality === 'azatoi') fans *= 1.2;
-    const fc = S.FLAME_CHANCE + (idol.condition < 0 ? S.FLAME_LOW_COND_CHANCE : 0);
+    if (idol.off === 'variety') fans *= 1 + 0.3 / members.length * (solo ? 1 : 2);
+    if (idol.personality === 'azatoi') fans *= 1 + 0.2 / members.length * (solo ? 1 : 2);
+    const fc = (S.FLAME_CHANCE + (idol.condition < 0 ? S.FLAME_LOW_COND_CHANCE : 0)) / (solo ? 1 : Math.sqrt(members.length));
     if (rng() < fc) flame = true;
     addStamina(idol, -S.STAMINA);
     if (solo) idol.focus += S.SOLO_FOCUS;
     addAffection(idol, solo ? S.SOLO_AFFECTION : S.UNIT_AFFECTION);
     res.lines.push({ speaker: idol.id, text: idolLine(idol, 'sns', rng) });
   }
-  if (!solo) state.unit.forEach((i) => { if (!members.includes(i)) addAffection(i, S.UNIT_AFFECTION); });
   if (flame) {
-    const loss = Math.round(state.fans * S.FLAME_FAN_LOSS);
-    state.fans -= loss;
+    const loss = Math.round(unit.fans * S.FLAME_FAN_LOSS);
+    unit.fans -= loss;
     members.forEach((i) => addCondition(i, -1));
     res.lines.push({ speaker: 'n', text: '投稿の一部が切り取られて、ちょっとした炎上に…!' });
     res.log.push(`炎上してファン -${loss}、調子ダウン`);
   } else {
     fans *= 1 + state.fame / S.FAME_FAN_DIV;
-    const got = addFans(state, fans * (0.8 + rng() * 0.4));
+    const got = addFans(state, unit, fans * (0.8 + rng() * 0.4));
     addFame(state, S.FAME);
     res.log.push(`ファン +${got}、知名度アップ`);
   }
 }
 
-function actOuting(state, opts, rng, res) {
+function actOuting(state, unit, opts, rng, res) {
   const O = C.OUTING;
   const solo = opts.target && opts.target !== 'unit';
   if (solo) {
@@ -287,22 +368,23 @@ function actOuting(state, opts, rng, res) {
     else res.lines.push({ speaker: idol.id, text: R.reactOuting[0] });
     res.log.push(`${idol.name}の親愛度と調子が上がった(-¥${O.SOLO_COST.toLocaleString()})`);
   } else {
-    res.title = 'ユニットでお出かけ';
-    state.money -= O.UNIT_COST;
-    state.unit.forEach((i) => {
+    res.title = 'みんなでお出かけ';
+    const cost = Math.round(O.UNIT_COST * unit.members.length / 3);
+    state.money -= cost;
+    unit.members.forEach((i) => {
       addAffection(i, O.UNIT_AFFECTION, 'outing'); addCondition(i, 1); addStamina(i, -O.STAMINA);
       res.lines.push({ speaker: i.id, text: idolLine(i, 'outing', rng) });
     });
-    addBond(state, O.UNIT_BOND);
-    res.log.push(`全員の親愛度・調子、絆 +${O.UNIT_BOND}(-¥${O.UNIT_COST.toLocaleString()})`);
+    addBond(unit, O.UNIT_BOND);
+    res.log.push(`全員の親愛度・調子、絆 +${O.UNIT_BOND}(-¥${cost.toLocaleString()})`);
   }
 }
 
-function actRest(state, opts, rng, res) {
+function actRest(state, unit, opts, rng, res) {
   const R = C.REST;
   res.title = 'お休み';
   const rec = R.STAMINA + state.invest.dorm * INVESTMENTS.dorm.effect;
-  state.unit.forEach((i) => {
+  unit.members.forEach((i) => {
     addStamina(i, rec);
     if (rng() < R.COND_UP_CHANCE) addCondition(i, 1);
     res.lines.push({ speaker: i.id, text: idolLine(i, 'rest', rng) });
@@ -312,12 +394,10 @@ function actRest(state, opts, rng, res) {
 }
 
 // ---------- 週末処理 ----------
-// 戻り値:再生するシーンの配列
 function endWeek(state) {
   const rng = weekRng(state, 'end');
   const scenes = [];
-  // 調子の変動
-  for (const idol of state.unit) {
+  for (const idol of allIdols(state)) {
     const dormStab = state.invest.dorm * 0.03;
     let down = C.CONDITION_DRIFT.down - dormStab + (idol.stamina < C.LOW_STAMINA ? C.CONDITION_LOW_STAMINA_DOWN : 0);
     let up = C.CONDITION_DRIFT.up + idol.affection / 500;
@@ -327,10 +407,12 @@ function endWeek(state) {
     else if (x > 1 - up) addCondition(idol, 1);
   }
   scenes.push(...checkRelationEvents(state));
-  // ランダムイベント
-  if (rng() < C.RANDOM_EVENT_CHANCE) {
-    const ev = pickRandomEvent(state, rng);
-    if (ev) scenes.push(ev);
+  // ランダムイベント(ユニットごとに抽選)
+  for (const unit of state.units) {
+    if (rng() < C.RANDOM_EVENT_CHANCE) {
+      const ev = pickRandomEvent(state, unit, rng);
+      if (ev) scenes.push(ev);
+    }
   }
   return scenes;
 }
@@ -338,7 +420,7 @@ function endWeek(state) {
 // ツンデレの「認める」と、エピソード解放
 function checkRelationEvents(state) {
   const scenes = [];
-  for (const idol of state.unit) {
+  for (const idol of allIdols(state)) {
     if (!idol.accepted && idolTotalStats(idol) >= C.TSUNDERE_ACCEPT_STATS) scenes.push(acceptScene(state, idol));
     scenes.push(...checkEpisodes(state, idol));
   }
@@ -373,63 +455,63 @@ function episodeScene(state, idol, n) {
       label: '黙って、最後まで受け止める',
       apply: (st) => {
         const i = findIdol(st, idol.id) || idol;
-        if (!i.honne) { i.honne = true; addAffection(i, 5); addBond(st, 3); }
+        const u = unitOfIdol(st, i.id);
+        if (!i.honne) { i.honne = true; addAffection(i, 5); if (u) addBond(u, 3); }
         return `${i.name}の本音を受け止めた。(本音イベント回収)`;
       },
     },
     {
       label: '「らしくないな」と冗談で返す',
-      apply: (st) => `${idol.name}は少し笑って、いつもの顔に戻った。(あとでアイドルの詳細から見直せる)`,
+      apply: () => `${idol.name}は少し笑って、いつもの顔に戻った。(あとでアイドルの詳細から見直せる)`,
     },
   ]), idol, 'honne');
 }
 
-// ---------- ランダムイベント ----------
+// ---------- ランダムイベント(u = 対象ユニット) ----------
 const RANDOM_EVENTS = [
   {
     id: 'snack', weight: 3,
-    make: (s, r) => {
-      const i = r.pick(s.unit);
+    make: (s, u, r) => {
+      const i = r.pick(u.members);
       addAffection(i, 3);
       return makeScene('差し入れ', i, [['n', '{name}が、手作りのおにぎりを持ってきてくれた。'], ['i', idolLine(i, 'greet', r)], ['n', `${i.name}の親愛度が上がった。`]]);
     },
   },
   {
     id: 'rain', weight: 2,
-    make: (s) => makeScene('突然の雨', null, [['n', 'レッスン帰り、突然の土砂降り。全員で軒下に駆け込んだ。']], [
-      { label: 'みんなで雨宿りしながら話す', apply: (st) => { addBond(st, 5); return '他愛ない話で盛り上がった。(絆 +5)'; } },
-      { label: 'タクシー代を出す(¥10,000)', apply: (st) => { st.money -= 10000; st.unit.forEach((i) => addCondition(i, 1)); return '濡れずに帰れた。(全員の調子 +1)'; } },
+    make: (s, u) => makeScene(`突然の雨(${u.name})`, null, [['n', `レッスン帰り、突然の土砂降り。${u.name}のみんなで軒下に駆け込んだ。`]], [
+      { label: 'みんなで雨宿りしながら話す', apply: () => { addBond(u, 5); return '他愛ない話で盛り上がった。(絆 +5)'; } },
+      { label: 'タクシー代を出す(¥10,000)', apply: (st) => { st.money -= 10000; u.members.forEach((i) => addCondition(i, 1)); return '濡れずに帰れた。(全員の調子 +1)'; } },
     ]),
   },
   {
     id: 'rival', weight: 2,
-    make: (s) => {
-      const nl = nextLive(s);
-      const rival = nl ? C.RIVALS[nl.index].name : 'ライバル';
-      return makeScene('ライバルの挑発', null, [['n', `テレビ局の廊下で「${rival}」とすれ違った。`], ['n', '「弱小事務所は、せいぜい頑張ってね」']], [
-        { label: '「受けて立つ」と言い返す', apply: (st) => { st.unit.forEach((i) => addCondition(i, 1)); addBond(st, 3); return '全員の目に火がついた!(調子 +1、絆 +3)'; } },
+    make: (s, u) => {
+      const rival = C.RIVALS[Math.min(u.livesDone, C.RIVALS.length - 2)].name;
+      return makeScene(`ライバルの挑発(${u.name})`, null, [['n', `テレビ局の廊下で「${rival}」とすれ違った。`], ['n', '「弱小事務所は、せいぜい頑張ってね」']], [
+        { label: '「受けて立つ」と言い返す', apply: () => { u.members.forEach((i) => addCondition(i, 1)); addBond(u, 3); return '全員の目に火がついた!(調子 +1、絆 +3)'; } },
         { label: '笑って受け流す', apply: (st) => { addFame(st, 2); return '大人の対応が記者の目に留まった。(知名度 +2)'; } },
       ]);
     },
   },
   {
-    id: 'scandal', weight: 1, cond: (s) => s.fans > 3000,
-    make: (s, r) => {
-      const i = r.pick(s.unit);
+    id: 'scandal', weight: 1, cond: (s, u) => u.fans > 3000,
+    make: (s, u, r) => {
+      const i = r.pick(u.members);
       return makeScene('熱愛疑惑!?', i, [['n', '週刊誌に{name}の「熱愛疑惑」が載った。相手は…実のお兄さんだ。']], [
-        { label: '正直に説明する', apply: (st) => { addAffection(i, 6); const l = Math.round(st.fans * 0.01); st.fans -= l; return `誤解はすぐに解けた。${i.name}は社長への信頼を深めた。(ファン -${l})`; } },
-        { label: 'ノーコメントを貫く', apply: (st) => { const l = Math.round(st.fans * 0.04); st.fans -= l; addFame(st, 3); return `話題にはなったが、ファンは減った。(ファン -${l}、知名度 +3)`; } },
+        { label: '正直に説明する', apply: () => { addAffection(i, 6); const l = Math.round(u.fans * 0.01); u.fans -= l; return `誤解はすぐに解けた。${i.name}は社長への信頼を深めた。(ファン -${l})`; } },
+        { label: 'ノーコメントを貫く', apply: (st) => { const l = Math.round(u.fans * 0.04); u.fans -= l; addFame(st, 3); return `話題にはなったが、ファンは減った。(ファン -${l}、知名度 +3)`; } },
       ]);
     },
   },
   {
     id: 'interview', weight: 2,
-    make: (s) => { addFame(s, 4); const g = addFans(s, 500); return makeScene('取材依頼', null, [['n', '地元のWebメディアから取材が来た!'], ['n', `知名度 +4、ファン +${g}`]]); },
+    make: (s, u) => { addFame(s, 4); const g = addFans(s, u, 500); return makeScene('取材依頼', null, [['n', `地元のWebメディアから${u.name}に取材が来た!`], ['n', `知名度 +4、ファン +${g}`]]); },
   },
   {
     id: 'sick', weight: 2,
-    make: (s, r) => {
-      const i = r.pick(s.unit);
+    make: (s, u, r) => {
+      const i = r.pick(u.members);
       addStamina(i, -20);
       return makeScene('体調不良', i, [['n', '{name}が少し熱っぽいようだ。(体力 -20)'], ['i', idolLine(i, 'tired', r)]], [
         { label: '病院に連れて行く(¥8,000)', apply: (st) => { st.money -= 8000; addStamina(i, 15); addAffection(i, 3); return `${i.name}はすぐに元気を取り戻した。(体力 +15)`; } },
@@ -438,48 +520,59 @@ const RANDOM_EVENTS = [
     },
   },
   {
-    id: 'quarrel', weight: 2, cond: (s) => s.bond < 50,
-    make: (s, r) => {
-      const [a, b] = r.shuffle(s.unit);
-      return makeScene('ユニット内のケンカ', a, [['n', `${a.name}と${b.name}が、振り付けのことで言い争っている。`]], [
-        { label: '間に入って話を聞く', apply: (st) => { addBond(st, 6); return '本音をぶつけ合って、前より仲良くなった。(絆 +6)'; } },
-        { label: '二人に任せて見守る', apply: (st) => { const ok = makeRng(st.seed + st.week + 'q')() < 0.5; addBond(st, ok ? 8 : -5); return ok ? '二人だけで仲直りできた!(絆 +8)' : 'わだかまりが残った…(絆 -5)'; } },
+    id: 'quarrel', weight: 2, cond: (s, u) => u.bond < 50,
+    make: (s, u, r) => {
+      const [a, b] = r.shuffle(u.members);
+      return makeScene(`ユニット内のケンカ(${u.name})`, a, [['n', `${a.name}と${b.name}が、振り付けのことで言い争っている。`]], [
+        { label: '間に入って話を聞く', apply: () => { addBond(u, 6); return '本音をぶつけ合って、前より仲良くなった。(絆 +6)'; } },
+        { label: '二人に任せて見守る', apply: (st) => { const ok = makeRng(st.seed + st.week + u.id + 'q')() < 0.5; addBond(u, ok ? 8 : -5); return ok ? '二人だけで仲直りできた!(絆 +8)' : 'わだかまりが残った…(絆 -5)'; } },
       ]);
     },
   },
   {
     id: 'letter', weight: 2,
-    make: (s) => { s.unit.forEach((i) => addAffection(i, 2)); const g = addFans(s, 200); return makeScene('ファンレター', null, [['n', '事務所に初めて段ボール一箱分のファンレターが届いた!'], ['n', `全員の親愛度 +2、ファン +${g}`]]); },
+    make: (s, u) => { u.members.forEach((i) => addAffection(i, 2)); const g = addFans(s, u, 200); return makeScene('ファンレター', null, [['n', `${u.name}宛てに、段ボール一箱分のファンレターが届いた!`], ['n', `全員の親愛度 +2、ファン +${g}`]]); },
   },
   {
     id: 'oldfriend', weight: 1,
-    make: () => makeScene('社長の昔なじみ', null, [['n', '昔の仕事仲間から「ちょっとした頼みごと」の電話が来た。']], [
+    make: (s, u) => makeScene('社長の昔なじみ', null, [['n', '昔の仕事仲間から「ちょっとした頼みごと」の電話が来た。']], [
       { label: '引き受ける', apply: (st) => { st.money += 50000; return '謝礼として ¥50,000 をもらった。'; } },
-      { label: 'アイドルたちを売り込む', apply: (st) => { addFame(st, 3); addFans(st, 300); return 'ユニットを紹介してもらえた。(知名度 +3、ファン +300)'; } },
+      { label: `${u.name}を売り込む`, apply: (st) => { addFame(st, 3); addFans(st, u, 300); return 'ユニットを紹介してもらえた。(知名度 +3、ファン +300)'; } },
     ]),
   },
   {
     id: 'nightpractice', weight: 2,
-    make: (s, r) => {
-      const i = r.pick(s.unit);
+    make: (s, u, r) => {
+      const i = r.pick(u.members);
       const st0 = r.pick(['tech', 'sense', 'visual']);
       return makeScene('深夜の自主練', i, [['n', '夜遅く、スタジオに{name}が一人で残っている。']], [
         { label: '止めて帰らせる', apply: () => { addAffection(i, 3); return `${i.name}は少しむくれながらも帰っていった。(親愛度 +3)`; } },
-        { label: 'とことん付き合う', apply: (st) => { addStat(i, st0, 5); addStamina(i, -10); addAffection(i, 2); i.focus += 1; return `${i.name}の${STAT_NAMES[st0]} +5(体力 -10)`; } },
+        { label: 'とことん付き合う', apply: () => { addStat(i, st0, 5); addStamina(i, -10); addAffection(i, 2); i.focus += 1; return `${i.name}の${STAT_NAMES[st0]} +5(体力 -10)`; } },
       ]);
     },
   },
   {
     id: 'unitdinner', weight: 2,
-    make: () => makeScene('ごはん会', null, [['n', 'メンバーから「みんなでごはん行きたい!」と提案があった。']], [
-      { label: '社長のおごりで行く(¥20,000)', apply: (st) => { st.money -= 20000; addBond(st, 6); st.unit.forEach((i) => addAffection(i, 2)); return '焼肉で大いに盛り上がった。(絆 +6、親愛度 +2)'; } },
+    make: (s, u) => makeScene(`ごはん会(${u.name})`, null, [['n', `${u.name}のメンバーから「みんなでごはん行きたい!」と提案があった。`]], [
+      { label: '社長のおごりで行く(¥20,000)', apply: (st) => { st.money -= 20000; addBond(u, 6); u.members.forEach((i) => addAffection(i, 2)); return '焼肉で大いに盛り上がった。(絆 +6、親愛度 +2)'; } },
       { label: '今回は見送る', apply: () => '「また今度ね」と、少し寂しそうだった。' },
     ]),
   },
+  {
+    id: 'senpai', weight: 2, cond: (s, u) => s.units.some((o) => o.startYear < u.startYear),
+    make: (s, u, r) => {
+      const senpaiUnit = r.pick(s.units.filter((o) => o.startYear < u.startYear));
+      const sp = r.pick(senpaiUnit.members), kh = r.pick(u.members);
+      return makeScene('先輩と後輩', sp, [['n', `${senpaiUnit.name}の{name}が、後輩の${kh.name}の練習を見てくれている。`], ['i', idolLine(sp, 'lesson', r)]], [
+        { label: 'そのまま任せる', apply: () => { addStat(kh, r.pick(['tech', 'sense', 'visual']), 4); addAffection(sp, 2); return `${kh.name}の能力が上がった。先輩の${sp.name}もうれしそうだ。`; } },
+        { label: '合同練習に切り替える', apply: () => { addBond(u, 3); addBond(senpaiUnit, 3); return `2つのユニットの絆がそれぞれ +3`; } },
+      ]);
+    },
+  },
 ];
 
-function gapEventFor(state, rng) {
-  const cands = state.unit.filter((i) => !i.gapRevealed);
+function gapEventFor(state, unit, rng) {
+  const cands = unit.members.filter((i) => !i.gapRevealed);
   if (!cands.length) return null;
   const i = rng.pick(cands);
   i.gapRevealed = true;
@@ -490,24 +583,25 @@ function gapEventFor(state, rng) {
   return withVideo(makeScene(`${i.name}の意外な一面`, i, raw), i, 'gap');
 }
 
-function pickRandomEvent(state, rng) {
+function pickRandomEvent(state, unit, rng) {
   if (rng() < C.GAP_EVENT_CHANCE) {
-    const g = gapEventFor(state, rng);
+    const g = gapEventFor(state, unit, rng);
     if (g) return g;
   }
-  const pool = RANDOM_EVENTS.filter((e) => !e.cond || e.cond(state));
+  const pool = RANDOM_EVENTS.filter((e) => !e.cond || e.cond(state, unit));
   const ev = rng.weighted(pool, (e) => e.weight);
   state.seenEvents[ev.id] = (state.seenEvents[ev.id] || 0) + 1;
-  return ev.make(state, rng);
+  return ev.make(state, unit, rng);
 }
 
-// 週を進める。戻り値:次に向かう phase
+// 週を進める
 function advanceWeek(state) {
   state.week++;
-  if (state.week > totalWeeks()) return state.phase;
+  state.plan = {};
+  state.liveUnitId = null;
+  state.stage = 'plan';
   if (weekInYear(state.week) === 1) {
-    const meta = state._metaLoopBonus || 0;
-    state.candidates = generateCandidates(state.seed, yearOf(state.week), meta, state.usedNames);
+    state.candidates = generateCandidates(state.seed, yearOf(state.week), state._metaLoopBonus || 0, state.usedNames);
     ensureCharacters(state);
     state.phase = 'scout';
   } else {
@@ -545,7 +639,7 @@ function buyItem(state, key) {
 function costumePrice(state, key) {
   const p = COSTUMES[key].price;
   if (p == null) return null;
-  const designer = state.unit.some((i) => i.off === 'design');
+  const designer = allIdols(state).some((i) => i.off === 'design');
   return designer ? Math.round(p * 0.8) : p;
 }
 function buyCostume(state, key) {
@@ -562,54 +656,76 @@ function equipCostume(state, idolId, key) {
   const idol = findIdol(state, idolId);
   if (idol && state.costumes.includes(key)) idol.costume = key;
 }
-function useItem(state, key, idolId) {
+// target: アイテムが idol 向けなら idolId、unit 向けなら unitId
+function useItem(state, key, target) {
   if (!state.items[key]) return { ok: false };
-  const idol = idolId ? findIdol(state, idolId) : null;
+  const idol = ITEMS[key].target === 'idol' ? findIdol(state, target) : null;
+  const unit = ITEMS[key].target === 'unit' ? findUnit(state, target) : null;
+  if (!idol && !unit) return { ok: false };
   switch (key) {
     case 'drink': addStamina(idol, 30); break;
     case 'charm': addCondition(idol, 1); break;
     case 'gift': addAffection(idol, 6); break;
-    case 'camp': addBond(state, 6); break;
-    case 'supple': state.unit.forEach((i) => addStamina(i, 15)); break;
+    case 'camp': addBond(unit, 6); break;
+    case 'supple': unit.members.forEach((i) => addStamina(i, 15)); break;
   }
   state.items[key]--;
-  pushLog(state, `${ITEMS[key].name}を使った${idol ? '(' + idol.name + ')' : ''}`);
+  pushLog(state, `${ITEMS[key].name}を使った(${idol ? idol.name : unit.name})`);
   return { ok: true, scenes: idol ? checkEpisodes(state, idol) : [] };
 }
 
 // ---------- ライブ ----------
-function liveSetup(state) {
-  const index = liveIndexOfWeek(state.week);
-  const rngR = makeRng(state.seed + ':rival:' + index);
-  const R = C.RIVALS[index];
+function liveSetup(state, unit) {
+  const l = liveOfWeek(state, state.week);
+  const isFinal = !!(l && l.type === 'final' && l.unitId === unit.id);
+  const tier = isFinal ? C.RIVALS.length - 1 : Math.min(unit.livesDone, C.RIVALS.length - 2);
+  const songSeed = state.seed + ':song:' + state.week + ':' + unit.id;
+  const rngR = makeRng(songSeed + ':rival');
+  const R = C.RIVALS[tier];
   const rivalScore = Math.round(R.score * (1 - C.RIVAL_VARIANCE + rngR() * C.RIVAL_VARIANCE * 2));
-  return { index, isFinal: index === C.LIVE_WEEKS.length - 1, rival: R.name, rivalScore, songSeed: state.seed + ':song:' + index };
+  return { unitId: unit.id, tier, liveNo: unit.livesDone + 1, isFinal, rival: R.name, rivalScore, songSeed };
 }
 
 // result: computeLiveScore の戻り値
-function applyLiveResult(state, setup, centerId, result) {
+function applyLiveResult(state, unit, setup, centerId, result) {
   const win = result.total >= setup.rivalScore;
   const rewards = [];
-  const fanGain = addFans(state, result.total * (win ? C.LIVE_FANS_WIN_RATE : C.LIVE_FANS_LOSE_RATE));
+  const fanGain = addFans(state, unit, result.total * (win ? C.LIVE_FANS_WIN_RATE : C.LIVE_FANS_LOSE_RATE));
   rewards.push(`ファン +${fanGain.toLocaleString()}`);
   const money = win ? C.LIVE_MONEY_WIN : C.LIVE_MONEY_LOSE;
   state.money += money;
   rewards.push(`¥${money.toLocaleString()}`);
-  addBond(state, win ? C.LIVE_BOND_WIN : C.LIVE_BOND_LOSE);
+  addBond(unit, win ? C.LIVE_BOND_WIN : C.LIVE_BOND_LOSE);
   rewards.push(`絆 +${win ? C.LIVE_BOND_WIN : C.LIVE_BOND_LOSE}`);
   addFame(state, win ? 5 : 2);
   const center = findIdol(state, centerId);
   center.focus += C.LIVE_FOCUS_CENTER;
-  state.unit.forEach((i) => { addStamina(i, -C.LIVE_STAMINA); addAffection(i, win ? 3 : 1); });
+  unit.members.forEach((i) => { addStamina(i, -C.LIVE_STAMINA); addAffection(i, win ? 3 : 1); });
   const scenes = [];
-  if (win && C.LIVE_COSTUME_REWARD[setup.index] && !state.costumes.includes(C.LIVE_COSTUME_REWARD[setup.index])) {
-    const k = C.LIVE_COSTUME_REWARD[setup.index];
-    state.costumes.push(k);
-    rewards.push(`衣装「${COSTUMES[k].name}」`);
+  const reward = C.LIVE_COSTUME_REWARD[setup.tier];
+  if (win && reward && !state.costumes.includes(reward)) {
+    state.costumes.push(reward);
+    rewards.push(`衣装「${COSTUMES[reward].name}」`);
   }
   if (win && !center.accepted) scenes.push(acceptScene(state, center));
-  state.liveResults.push({ index: setup.index, score: result.total, rival: setup.rivalScore, win, center: centerId, mode: result.mode });
-  pushLog(state, `ライブ${setup.index + 1}:${result.total.toLocaleString()}点 vs ${setup.rival} ${setup.rivalScore.toLocaleString()}点 → ${win ? '勝利!' : '敗北…'}`);
+  unit.livesDone++;
+  unit.liveResults.push({ week: state.week, tier: setup.tier, score: result.total, rival: setup.rivalScore, win, center: centerId, mode: result.mode, final: setup.isFinal });
+  pushLog(state, `${unit.name} ${setup.isFinal ? '卒業ライブ(決勝)' : `ライブ${setup.liveNo}`}:${result.total.toLocaleString()}点 vs ${setup.rival} ${setup.rivalScore.toLocaleString()}点 → ${win ? '勝利!' : '敗北…'}`);
   scenes.push(...checkRelationEvents(state));
   return { win, rewards, scenes };
+}
+
+// 決勝のあと:エンディングを判定し、ユニットを卒業させる
+function graduateUnit(state, unit, finalScore) {
+  const ev = evaluateEnding(unit, finalScore);
+  const record = {
+    gen: unit.gen, name: unit.name, ending: ev.id, finalScore, fans: unit.fans, bond: unit.bond,
+    week: state.week, members: unit.members.map((i) => ({ ...i, stats: { ...i.stats }, look: { ...i.look } })),
+    wins: unit.liveResults.filter((l) => l.win).length, losses: unit.liveResults.filter((l) => !l.win).length,
+    bias: ev.bias,
+  };
+  state.alumni.push(record);
+  state.units = state.units.filter((u) => u !== unit);
+  pushLog(state, `${unitLabel(unit)}が卒業した(${ENDINGS[ev.id].name})`);
+  return { ev, record };
 }

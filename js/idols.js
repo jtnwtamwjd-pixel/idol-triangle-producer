@@ -109,9 +109,11 @@ function assignCharacters(list, taken, seed) {
     used.add(ch.id);
   }
 }
+// 活動中の全ユニットのメンバーどうし、候補生とも重ならないように割り振る
 function ensureCharacters(state) {
-  assignCharacters(state.unit, [], state.seed);
-  assignCharacters(state.candidates, state.unit.map((i) => i.charId).filter(Boolean), state.seed);
+  const active = state.units.flatMap((u) => u.members);
+  assignCharacters(active, [], state.seed);
+  assignCharacters(state.candidates, active.map((i) => i.charId).filter(Boolean), state.seed);
 }
 
 // ---------- アバター(素材があれば画像、なければSVG) ----------
