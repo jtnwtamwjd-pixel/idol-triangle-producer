@@ -19,6 +19,9 @@
 // ・パスは index.html からの相対パスです
 // ============================================================
 const ASSET_CHARACTERS = [
+  { id: 'char10', image: 'assets/img/char10.png', videos: [], personality: 'nekketsu' }, // 珊瑚色ショート・赤白のステージジャケット
+  { id: 'char11', image: 'assets/img/char11.png', videos: [], personality: 'mypace' },   // ミント髪・月のケープレット
+  { id: 'char12', image: 'assets/img/char12.png', videos: [], personality: 'cool' },     // 紫のボブ・紺と銀のジャケット
   { id: 'char01', image: 'assets/img/char01.jpg', videos: [], personality: 'nekketsu' }, // 赤ジャケット・ガッツポーズ
   { id: 'char02', image: 'assets/img/char02.jpg', videos: [], personality: 'cool' },     // 黒髪ロング・青
   { id: 'char03', image: 'assets/img/char03.jpg', videos: [], personality: 'pro' },      // 金髪・星飾り

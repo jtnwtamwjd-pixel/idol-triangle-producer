@@ -94,11 +94,12 @@ function playScenes(scenes, done) {
           ${sp ? `<div class="scene-avatar">${sp.avatar}</div>` : ''}
           <div class="scene-text">${sp ? `<div class="scene-name">${esc(sp.name)}</div>` : ''}<p>${esc(ln.text)}</p></div>
         </div>
-        <div class="scene-next">▼ クリック / Enter</div>`;
+        <div class="scene-next"><span>ウィンドウをクリック / Enter</span><button type="button" class="btn scene-advance">次へ <span aria-hidden="true">→</span></button></div>`;
+      $('.scene-advance', box).onclick = (e) => { e.stopPropagation(); next(); };
       return;
     }
     if (sc.choices && !sc._chosen) {
-      $('.scene-next', box).remove();
+      const advance = $('.scene-next', box); if (advance) advance.remove();
       const c = document.createElement('div');
       c.className = 'choices';
       sc.choices.forEach((ch) => {
@@ -333,12 +334,13 @@ function renderHome() {
   const can = canRunWeek(s);
   root().innerHTML = `
     <div class="screen home">
+      <div class="studio-wordmark">✦ 三等星プロデュース <span>PRODUCER'S STAGE</span></div>
       <header class="top">
         <div class="date"><b>${yearOf(s.week)}</b>年目 <b>${weekInYear(s.week)}</b>週</div>
         <div class="res">
-          <span title="資金">💰 ${yen(s.money)}</span>
-          <span title="事務所の知名度">📣 ${Math.round(s.fame)}</span>
-          <span title="全ユニットのファン合計">💗 ${totalFans(s).toLocaleString()}</span>
+          <span title="資金"><small>資金</small> ${yen(s.money)}</span>
+          <span title="事務所の知名度"><small>知名度</small> ${Math.round(s.fame)}</span>
+          <span title="全ユニットのファン合計"><small>ファン</small> ${totalFans(s).toLocaleString()}</span>
         </div>
         <div class="menu"><button class="btn small" id="b-shop">ショップ</button><button class="btn small" id="b-items">アイテム</button><button class="btn small ghost" id="b-alumni">卒業生</button><button class="btn small ghost" id="b-log">ログ</button><button class="btn small ghost" id="b-set">設定</button><button class="btn small ghost" id="b-title">タイトル</button></div>
       </header>
@@ -347,15 +349,18 @@ function renderHome() {
         ? `<div class="live-banner final"><h2>🏆 卒業ライブ — アイドルグランプリ決勝</h2><p>${unitLabel(lu)}の3年間の集大成。持ち歌から${C.FINAL.songs}曲を選び、ライバル「${C.FINAL.rival}」に挑みます。1曲平均のスコアでエンディングが決まります。</p></div>`
         : `<div class="live-banner"><h2>🎤 今週はライブ!</h2><p>出場するユニットを選んでください(選んだユニットは今週ほかの行動をしません)。</p>
             <div class="row center">${s.units.map((u) => `<button class="btn ${s.liveUnitId === u.id ? '' : 'ghost'} pick-live" data-u="${u.id}">${u.gen}期生 ${esc(u.name)}<small>${venueOf(u).name}・最大${Math.min(venueOf(u).maxSongs, u.songs.length)}曲 vs ${venueOf(u).rival}</small></button>`).join('')}</div></div>`)
-      : `<div class="next-live">${nl ? `次のライブ:${nl.inWeeks}週後${nl.type === 'final' ? `(${unitLabel(findUnit(s, nl.unitId))}の卒業ライブ)` : '(出場ユニットはその週に選ぶ)'}` : ''}</div>`}
+      : `<div class="stage-hero"><div><span class="stage-kicker">NEXT SPOTLIGHT</span><h1>この一週間が、<br>次の輝きになる。</h1><p>レッスンで磨く。発信で届ける。あなたらしいプロデュースを。</p></div><div class="live-count"><span>次の${nl && nl.type === 'final' ? '卒業' : ''}ライブまで</span><strong>${nl ? nl.inWeeks : '—'}<small>週</small></strong><span>出場ユニットはライブの週に選択</span></div></div>`}
       ${s.units.map((u) => unitSection(s, u, lu)).join('')}
       <div class="run-bar">
-        <span class="hint">${can.ok ? '準備OK!' : esc(can.why)}</span>
+        <div><b>${Object.keys(s.plan).filter((id) => s.units.some((u) => u.id === id && (!lu || u.id !== lu.id))).length} / ${s.units.length - (lu ? 1 : 0)} 組の行動を設定</b><span class="hint">${can.ok ? '準備OK! この週を進めましょう。' : esc(can.why)}<br>実行するまで、行動は選び直せます。</span></div>
         <button class="btn big" id="b-run" ${can.ok ? '' : 'disabled'}>${lu ? '行動を実行してライブへ' : 'この週を実行'}</button>
       </div>
       <div class="log-mini">${s.log.slice(0, 5).map((l) => `<div>${esc(l)}</div>`).join('')}</div>
     </div>`;
-  $$('.idol-card').forEach((el) => el.onclick = () => showIdolDetail(el.dataset.id));
+  $$('.idol-card').forEach((el) => {
+    el.onclick = () => showIdolDetail(el.dataset.id);
+    el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
+  });
   $$('.action').forEach((el) => el.onclick = () => chooseAction(findUnit(s, el.dataset.u), el.dataset.act));
   $$('.songs-btn').forEach((el) => el.onclick = () => showSongs(findUnit(s, el.dataset.u)));
   $$('.pick-live').forEach((el) => el.onclick = () => { setLiveUnit(s, el.dataset.u); playSE('select'); saveGame(); renderHome(); });
@@ -380,9 +385,20 @@ function unitSection(s, u, liveUnit) {
     <div class="venue-row">${venueBadge(u)}<button class="btn small ghost songs-btn" data-u="${u.id}">🎵 持ち歌 ${u.songs.length}曲(Lv合計 ${u.songs.reduce((a, x) => a + x.level, 0)})</button></div>
     <div class="grid members m${u.members.length}">${u.members.map(idolCard).join('')}</div>
     ${isLive ? '<div class="plan-live">🎤 今週はライブに出場します</div>' : `
-    <div class="actions">${ACTIONS.map(([k, n, d]) => `<button class="action a-${k} ${p && p.action === k ? 'chosen' : ''}" data-u="${u.id}" data-act="${k}"><b>${n}</b><small>${d}</small></button>`).join('')}</div>
+    <div class="weekly-guide"><span>✦ 今週のヒント</span> ${esc(weeklyTip(u))}</div>
+    <div class="action-heading"><b>今週は、どう育てる？</b><small>1ユニットにつき1つの行動</small></div>
+    <div class="actions">${ACTIONS.map(([k, n, d], index) => `<button class="action a-${k} ${p && p.action === k ? 'chosen' : ''}" aria-pressed="${!!(p && p.action === k)}" data-u="${u.id}" data-act="${k}"><span class="action-symbol" aria-hidden="true">${['✧', '◈', '↗', '♡', '☾'][index]}</span><b>${n}</b><small>${d}</small>${p && p.action === k ? '<span class="selected-label">✓ 選択中</span>' : ''}</button>`).join('')}</div>
     <div class="plan-chip ${p ? 'set' : ''}">${p ? '✔ ' + esc(planLabel(s, p)) : '行動を選んでください'}</div>`}
   </section>`;
+}
+
+function weeklyTip(u) {
+  if (u.members.some((i) => i.stamina < C.LOW_STAMINA)) return '体力が少ないメンバーがいます。休みで回復して、次の舞台に備えましょう。';
+  if (u.members.some((i) => i.condition < 0)) return '調子が落ちているメンバーがいます。お出かけで気分を整えるのもおすすめ。';
+  const nv = nextVenue(u);
+  if (nv && u.fans < nv.needFans) return `次の会場までファンあと${Math.ceil(nv.needFans - u.fans).toLocaleString()}人。SNSやお仕事で魅力を届けましょう。`;
+  if (nv && (u.lastSetLv || 0) < nv.needSongLv) return '持ち歌を練習し、ライブで演奏しましょう。会場昇格には前回の演奏曲Lv合計も必要です。';
+  return 'レッスンで得意を伸ばす？ お出かけで絆を深める？ 次のステージに向けて準備しましょう。';
 }
 
 // 箱(会場)と次の箱までの条件
@@ -411,8 +427,9 @@ function showSongs(u) {
 
 function idolCard(i) {
   const epNext = i.episodesSeen < 3 ? C.EPISODE_THRESHOLDS[i.episodesSeen] : null;
-  return `<div class="card idol-card" data-id="${i.id}">
-    <div class="ic-head">${avatarSVG(i, 56)}<div><h4>${esc(i.name)}</h4>${idolTags(i)}</div></div>
+  return `<div class="card idol-card" data-id="${i.id}" role="button" tabindex="0" aria-label="${esc(i.name)}の詳細">
+    <div class="ic-head">${avatarSVG(i, 120)}<div><h4>${esc(i.name)}</h4>${idolTags(i)}</div></div>
+    <div class="member-status">${i.stamina < C.LOW_STAMINA ? '☾ ひと休みして、また前へ' : i.condition > 0 ? '✦ ステージへの準備は順調' : i.condition < 0 ? '♡ 気分を整える時間も大切に' : '✧ 次のステージへ、一歩ずつ'}</div>
     <div class="ic-row"><span>体力</span>${bar(i.stamina, i.staminaMax, i.stamina < C.LOW_STAMINA ? 'low' : 'stamina')}<small>${i.stamina}</small></div>
     <div class="ic-row"><span>親愛度</span>${bar(i.affection, C.AFFECTION_MAX, 'aff')}<small>${Math.round(i.affection)}</small></div>
     <div class="ic-row"><span>調子</span>${condBadge(i.condition)}<span class="ep">EP ${i.episodesSeen}/3${epNext ? `(次${epNext})` : ''}${i.honne ? ' 💌' : ''}${!i.accepted ? ' 😤' : ''}</span></div>
@@ -421,9 +438,43 @@ function idolCard(i) {
 }
 
 // ---------- 行動の選択(ユニットごと) ----------
+function actionPreview(s, unit, act, pick, ready) {
+  if (!ready) return '<span class="stage-kicker">ACTION PREVIEW</span><h3>今週の成長を、ここでチェック。</h3><p>内容と参加メンバーを選ぶと、効果と体力の変化を確認できます。</p>';
+  const solo = pick.target && !['unit', 'president'].includes(pick.target) && pick.stat !== 'song';
+  const members = solo ? unit.members.filter((i) => i.id === pick.target) : unit.members;
+  let effect = '', cost = 0, drain = 0, recover = 0;
+  if (act === 'lesson') {
+    drain = solo ? C.LESSON.SOLO_STAMINA : C.LESSON.UNIT_STAMINA;
+    effect = pick.stat === 'song' ? `「${esc((findSong(unit, pick.songId) || {}).title || '')}」経験値 +${C.SONG_EXP_PRACTICE} ／ 絆 +${C.LESSON.UNIT_BOND} ／ 全員の3能力 +${C.LESSON.UNIT_SUB_GAIN}` : `${STAT_NAMES[pick.stat]}の成長基準 +${C.LESSON.UNIT_GAIN * (solo ? C.LESSON.SOLO_MUL : 1)}（調子・得意分野などの補正前） ／ ${solo ? '他メンバーの体力 +' + C.LESSON.SOLO_OTHERS_RECOVER : '他の2能力 +' + C.LESSON.UNIT_SUB_GAIN + '・絆 +' + C.LESSON.UNIT_BOND}`;
+  } else if (act === 'work') {
+    if (pick.target === 'president') {
+      recover = C.WORK.PRESIDENT_IDOL_RECOVER;
+      effect = `社長の報酬目安 ${yen(C.WORK.PRESIDENT_MONEY * (1 + (officeScale(s) - 1) * C.WORK.PRESIDENT_SCALE_MUL))} ／ 全員の体力回復`;
+    } else {
+      drain = solo ? C.WORK.SOLO_STAMINA : C.WORK.UNIT_STAMINA;
+      effect = `基本報酬目安 ${yen((solo ? C.WORK.SOLO_MONEY : C.WORK.UNIT_MONEY) * workMoneyMul(s))} ／ ファン・トーク力アップ`;
+    }
+  } else if (act === 'sns') {
+    drain = C.SNS.STAMINA;
+    effect = `ファン獲得・親愛度アップ ／ 成功時は知名度 +${C.SNS.FAME}。炎上するとファンが減り、調子が下がります。`;
+  } else if (act === 'outing') {
+    drain = C.OUTING.STAMINA;
+    cost = solo ? C.OUTING.SOLO_COST : Math.round(C.OUTING.UNIT_COST * unit.members.length / 3);
+    effect = `親愛度アップ・調子 +1${solo ? '' : ' ／ 絆 +' + C.OUTING.UNIT_BOND}`;
+  } else {
+    recover = C.REST.STAMINA + s.invest.dorm * INVESTMENTS.dorm.effect;
+    effect = `全員の体力回復 ／ 資金 +${yen(C.REST.PRESIDENT_MONEY)} ／ 調子アップのチャンス`;
+  }
+  const staminaRows = members.map((i) => {
+    const actualDrain = act === 'lesson' && pick.stat !== 'song' && i.personality === 'pro' ? drain * 1.15 : drain;
+    const after = Math.round(Math.min(i.staminaMax, Math.max(0, i.stamina - actualDrain + recover)));
+    return `<div class="preview-stamina"><span>${esc(i.name)}</span><b>${i.stamina} <span aria-hidden="true">→</span> ${after}</b>${after < C.LOW_STAMINA ? '<small class="warn">体力に注意</small>' : ''}</div>`;
+  }).join('');
+  return `<span class="stage-kicker">ACTION PREVIEW</span><h3>${solo ? esc(members[0].name) : pick.target === 'president' ? '社長のお仕事' : 'ユニット全員'}の今週</h3><p>${effect}</p><div class="preview-cost">費用 <b>${yen(cost)}</b>${cost > s.money ? '<span class="warn"> 資金不足：ほかの行動を検討してください</span>' : ''}</div><h4>行動直後の体力</h4>${staminaRows}<p class="hint">能力・報酬は調子や得意分野、成功判定で変化します。週末のイベント・自然変動は含みません。上限に達している値は増えません。</p>`;
+}
+
 function chooseAction(unit, act) {
   const s = App.state;
-  if (act === 'rest') { setPlan(s, unit.id, 'rest', {}); saveGame(); return renderHome(); }
   const opt = (v, label, extra) => `<button class="btn opt" data-v="${v}">${label}${extra ? `<small>${extra}</small>` : ''}</button>`;
   const idolOpts = (extraFn) => unit.members.map((i) => opt(i.id, esc(i.name), extraFn(i))).join('');
   let html = `<p class="hint">${genBadge(unit)} ${esc(unit.name)}</p>`;
@@ -438,12 +489,16 @@ function chooseAction(unit, act) {
     html += `<h2>SNS</h2><div class="opts" id="o-target">${opt('unit', 'ユニットで投稿', 'ファン・全員の親愛度')}${idolOpts((i) => `ビジュアル ${Math.round(i.stats.visual)}`)}</div><p class="hint">調子が悪いと炎上しやすくなります。</p>`;
   } else if (act === 'outing') {
     html += `<h2>お出かけ</h2><div class="opts" id="o-target">${opt('unit', 'みんなで出かける', `絆↑ ${yen(Math.round(C.OUTING.UNIT_COST * unit.members.length / 3))}`)}${idolOpts((i) => `親愛度 ${Math.round(i.affection)}・${yen(C.OUTING.SOLO_COST)}`)}</div>`;
+  } else if (act === 'rest') {
+    html += '<h2>休み</h2><p>次の輝きのために、今週はひと休み。メンバー全員が体力を回復し、社長は事務作業で資金を補います。</p>';
   }
-  html += `<div class="row"><button class="btn ghost" id="o-cancel">やめる</button><button class="btn big" id="o-go" disabled>決定</button></div>`;
-  const box = openModal(html);
+  html += `<div id="action-preview" class="action-preview" aria-live="polite"></div><div class="action-footer"><p class="hint">ここでは行動の予約だけ。ホームの「この週を実行」で1週進みます。</p><div class="row"><button class="btn ghost" id="o-cancel">戻る</button><button class="btn big" id="o-go" disabled>この行動を予約</button></div></div>`;
+  const box = openModal(html, 'action-modal');
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', ACTIONS.find((a) => a[0] === act)[1] + 'を選ぶ');
   const pick = { stat: act === 'lesson' ? null : undefined, target: null, songId: null };
-  const ready = () => (pick.stat === 'song' ? !!pick.songId : pick.target && (act !== 'lesson' || pick.stat));
-  const mark = (g, b) => { $$(g + ' .opt', box).forEach((x) => x.classList.toggle('sel', x === b)); $('#o-go', box).disabled = !ready(); };
+  const ready = () => act === 'rest' || (pick.stat === 'song' ? !!pick.songId : pick.target && (act !== 'lesson' || pick.stat));
+  const refresh = () => { $('#o-go', box).disabled = !ready(); $('#action-preview', box).innerHTML = actionPreview(s, unit, act, pick, ready()); };
+  const mark = (g, b) => { $$(g + ' .opt', box).forEach((x) => { x.classList.toggle('sel', x === b); x.setAttribute('aria-pressed', String(x === b)); }); refresh(); };
   $$('#o-stat .opt', box).forEach((b) => b.onclick = () => {
     pick.stat = b.dataset.v;
     $('#o-song-wrap', box).classList.toggle('hidden', pick.stat !== 'song');
@@ -452,7 +507,13 @@ function chooseAction(unit, act) {
   });
   $$('#o-song .opt', box).forEach((b) => b.onclick = () => { pick.songId = b.dataset.v; mark('#o-song', b); });
   $$('#o-target .opt', box).forEach((b) => b.onclick = () => { pick.target = b.dataset.v; mark('#o-target', b); });
-  $('#o-cancel', box).onclick = closeModal;
+  $('#o-cancel', box).onclick = () => { closeModal(); const trigger = $(`.action[data-u="${unit.id}"][data-act="${act}"]`); if (trigger) trigger.focus(); };
+  refresh();
+  $('#o-cancel', box).focus();
+  box.onkeydown = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(); const trigger = $(`.action[data-u="${unit.id}"][data-act="${act}"]`); if (trigger) trigger.focus(); }
+    if (e.key === 'Tab') { const buttons = $$('button:not(:disabled)', box).filter((b) => b.getClientRects().length); const first = buttons[0], last = buttons[buttons.length - 1]; if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); } else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); } }
+  };
   $('#o-go', box).onclick = () => {
     const opts = { target: pick.stat === 'song' ? 'unit' : pick.target };
     if (pick.stat) opts.stat = pick.stat;
