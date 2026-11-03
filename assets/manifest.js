@@ -26,4 +26,6 @@ const ASSET_CHARACTERS = [
   { id: 'char05', image: 'assets/img/char05.jpg', videos: [], personality: 'mypace' },   // パーカー・ヘッドホン
   { id: 'char06', image: 'assets/img/char06.jpg', videos: [], personality: 'azatoi' },   // ツインテール・ウインク
   { id: 'char07', image: 'assets/img/char07.jpg', videos: [], personality: 'kurou' },    // 銀髪ショート・三つ編み
+  { id: 'char08', image: 'assets/img/char08.jpg', videos: [], personality: 'pro' },      // 金髪・三つ編みのまとめ髪
+  { id: 'char09', image: 'assets/img/char09.jpg', videos: [], personality: 'kurou' },    // 茶髪お団子・タオル
 ];
