@@ -12,10 +12,18 @@
 //   },
 //
 // ・候補生には、ここに書いたキャラが自動で割り振られます(同じ年の候補生とユニット内では重ならない)
+//   キャラが足りないときは、別のユニットと同じキャラを使い回すことがあります
 // ・ここが空、またはキャラが足りずに割り振れなかった子は、従来のSVGアバターで表示します
 // ・動画は、エピソード・本音イベント・ギャップ・「才能を認めた日」の途中で流れます
 //   (「次へ」を押すまでループ再生。設定画面でオフにもできます)
 // ・パスは index.html からの相対パスです
 // ============================================================
 const ASSET_CHARACTERS = [
+  { id: 'char01', image: 'assets/img/char01.jpg', videos: [], personality: 'nekketsu' }, // 赤ジャケット・ガッツポーズ
+  { id: 'char02', image: 'assets/img/char02.jpg', videos: [], personality: 'cool' },     // 黒髪ロング・青
+  { id: 'char03', image: 'assets/img/char03.jpg', videos: [], personality: 'pro' },      // 金髪・星飾り
+  { id: 'char04', image: 'assets/img/char04.jpg', videos: [], personality: 'pure' },     // 桜・ピンクのドレス
+  { id: 'char05', image: 'assets/img/char05.jpg', videos: [], personality: 'mypace' },   // パーカー・ヘッドホン
+  { id: 'char06', image: 'assets/img/char06.jpg', videos: [], personality: 'azatoi' },   // ツインテール・ウインク
+  { id: 'char07', image: 'assets/img/char07.jpg', videos: [], personality: 'kurou' },    // 銀髪ショート・三つ編み
 ];

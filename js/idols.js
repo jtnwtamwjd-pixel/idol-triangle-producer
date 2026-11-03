@@ -90,30 +90,33 @@ function idolVideos(idol) {
   const ch = idolCharacter(idol);
   return ch && Array.isArray(ch.videos) ? ch.videos.filter(Boolean) : [];
 }
-// list の各アイドルに、未使用のキャラを割り振る(taken は使用済みとみなすキャラID)
-// 素材が足りなければ割り振らない(SVGで表示される)
-function assignCharacters(list, taken, seed) {
+// list の各アイドルに、キャラを割り振る(list の中では重ならない)
+// avoid のキャラはなるべく避けるが、足りなければ使い回す。それでも足りなければSVGで表示される
+function assignCharacters(list, avoid, seed) {
   const chars = assetChars();
   if (!chars.length) return;
-  const used = new Set(taken || []);
-  for (const i of list) if (idolCharacter(i)) used.add(i.charId);
+  const inList = new Set();
+  for (const i of list) if (idolCharacter(i)) inList.add(i.charId);
+  const avoidSet = new Set(avoid || []);
   for (const idol of list) {
     if (idolCharacter(idol)) continue;
     idol.charId = null;
-    let pool = chars.filter((c) => !used.has(c.id));
-    if (!pool.length) continue;
+    const free = chars.filter((c) => !inList.has(c.id));
+    if (!free.length) continue;
+    let pool = free.filter((c) => !avoidSet.has(c.id));
+    if (!pool.length) pool = free;
     const match = pool.filter((c) => c.personality === idol.personality);
     if (match.length) pool = match;
     const ch = pool[hashSeed(seed + ':char:' + idol.id) % pool.length];
     idol.charId = ch.id;
-    used.add(ch.id);
+    inList.add(ch.id);
   }
 }
-// 活動中の全ユニットのメンバーどうし、候補生とも重ならないように割り振る
+// ユニット内・候補生どうしでは重ならないように割り振る(他のユニットとはなるべく重ならない)
 function ensureCharacters(state) {
-  const active = state.units.flatMap((u) => u.members);
-  assignCharacters(active, [], state.seed);
-  assignCharacters(state.candidates, active.map((i) => i.charId).filter(Boolean), state.seed);
+  const taken = () => state.units.flatMap((u) => u.members).map((i) => i.charId).filter(Boolean);
+  for (const u of state.units) assignCharacters(u.members, taken().filter((id) => !u.members.some((i) => i.charId === id)), state.seed);
+  assignCharacters(state.candidates, taken(), state.seed);
 }
 
 // ---------- アバター(素材があれば画像、なければSVG) ----------
